@@ -1,10 +1,3 @@
-//***************************************************************************************
-// Default.hlsl by Frank Luna (C) 2015 All Rights Reserved.
-//
-// Default shader, currently supports lighting.
-//***************************************************************************************
-
-// Defaults for number of lights.
 #ifndef NUM_DIR_LIGHTS
     #define NUM_DIR_LIGHTS 3
 #endif
@@ -17,21 +10,19 @@
     #define NUM_SPOT_LIGHTS 0
 #endif
 
-// Include structures and functions for lighting.
 #include "LightingUtil.hlsl"
 
 Texture2D    gDiffuseMap : register(t0);
 SamplerState gsamLinear  : register(s0);
 
-
-// Constant data that varies per frame.
 cbuffer cbPerObject : register(b0)
 {
     float4x4 gWorld;
     float4x4 gTexTransform;
+    int      gIsChessboard;
+    float3   gPad;
 };
 
-// Constant data that varies per material.
 cbuffer cbPass : register(b1)
 {
     float4x4 gView;
@@ -50,16 +41,12 @@ cbuffer cbPass : register(b1)
     float gDeltaTime;
     float4 gAmbientLight;
 
-    // Indices [0, NUM_DIR_LIGHTS) are directional lights;
-    // indices [NUM_DIR_LIGHTS, NUM_DIR_LIGHTS+NUM_POINT_LIGHTS) are point lights;
-    // indices [NUM_DIR_LIGHTS+NUM_POINT_LIGHTS, NUM_DIR_LIGHTS+NUM_POINT_LIGHT+NUM_SPOT_LIGHTS)
-    // are spot lights for a maximum of MaxLights per object.
     Light gLights[MaxLights];
 };
 
 cbuffer cbMaterial : register(b2)
 {
-	float4 gDiffuseAlbedo;
+    float4 gDiffuseAlbedo;
     float3 gFresnelR0;
     float  gRoughness;
     float4x4 gMatTransform;
@@ -67,37 +54,61 @@ cbuffer cbMaterial : register(b2)
 
 struct VertexIn
 {
-	float3 PosL    : POSITION;
+    float3 PosL    : POSITION;
     float3 NormalL : NORMAL;
-	float2 TexC    : TEXCOORD;
+    float2 TexC    : TEXCOORD;
+    float2 Color   : COLOR;
 };
 
 struct VertexOut
 {
-	float4 PosH    : SV_POSITION;
+    float4 PosH    : SV_POSITION;
     float3 PosW    : POSITION;
     float3 NormalW : NORMAL;
-	float2 TexC    : TEXCOORD;
+    float2 TexC    : TEXCOORD;
 };
 
 VertexOut VS(VertexIn vin)
 {
-	VertexOut vout = (VertexOut)0.0f;
-	
-    // Transform to world space.
-    float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
+    VertexOut vout = (VertexOut)0.0f;
+    
+    float3 pos = vin.PosL;
+    if (gIsChessboard == 1)
+    {
+        float speed = 1.0f;
+        float maxExtraHeight = 0.35f;
+        float t = abs(sin(gTotalTime * speed));
+    
+        float originalBottom = -0.05f;
+        float originalTop = 0.05f;
+        float originalHeight = 0.1f;
+    
+        if (vin.Color.x == 0.0f)
+        {
+            float newBottom = originalBottom;
+            float newTop = originalTop + maxExtraHeight * t;
+        
+            float ty = (pos.y - originalBottom) / originalHeight;
+            pos.y = lerp(newBottom, newTop, ty);
+        }
+        else
+        {
+            float newBottom = originalBottom - maxExtraHeight * t;
+            float newTop = originalTop;
+        
+            float ty = (pos.y - originalBottom) / originalHeight;
+            pos.y = lerp(newBottom, newTop, ty);
+        }
+    }
+    
+    float4 posW = mul(float4(pos, 1.0f), gWorld);
     vout.PosW = posW.xyz;
-
-    // Assumes nonuniform scaling; otherwise, need to use inverse-transpose of world matrix.
     vout.NormalW = mul(vin.NormalL, (float3x3)gWorld);
-
-    // Transform to homogeneous clip space.
     vout.PosH = mul(posW, gViewProj);
-	
-	// Output vertex attributes for interpolation across triangle.
+    
     float4 texC = mul(float4(vin.TexC, 0.0f, 1.0f), gTexTransform);
     vout.TexC = mul(texC, gMatTransform).xy;
-
+    
     return vout;
 }
 
@@ -105,14 +116,11 @@ float4 PS(VertexOut pin) : SV_Target
 {
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamLinear, pin.TexC) * gDiffuseAlbedo;
 
-    // Interpolating normal can unnormalize it, so renormalize it.
     pin.NormalW = normalize(pin.NormalW);
 
-    // Vector from point being lit to eye. 
     float3 toEyeW = normalize(gEyePosW - pin.PosW);
 
-    // Light terms.
-    float4 ambient = gAmbientLight*diffuseAlbedo;
+    float4 ambient = gAmbientLight * diffuseAlbedo;
 
     const float shininess = 1.0f - gRoughness;
     Material mat = { diffuseAlbedo, gFresnelR0, shininess };
@@ -121,11 +129,7 @@ float4 PS(VertexOut pin) : SV_Target
         pin.NormalW, toEyeW, shadowFactor);
 
     float4 litColor = ambient + directLight;
-
-    // Common convention to take alpha from diffuse material.
     litColor.a = diffuseAlbedo.a;
 
     return litColor;
 }
-
-

@@ -515,3 +515,168 @@ GeometryGenerator::MeshData GeometryGenerator::CreateQuad(float x, float y, floa
 
     return meshData;
 }
+
+GeometryGenerator::MeshData GeometryGenerator::CreateChessboard(float width, float depth, uint32 squaresPerSide, float yOffset)
+{
+	MeshData meshData;
+
+	float halfWidth = width * 0.5f;
+	float halfDepth = depth * 0.5f;
+	float squareSizeX = width / squaresPerSide;
+	float squareSizeZ = depth / squaresPerSide;
+	float thickness = 0.1f;
+
+	float yBottom = -thickness * 0.5f;
+	float yTop = thickness * 0.5f;
+
+	for (uint32 i = 0; i < squaresPerSide; ++i)
+	{
+		float zStart = -halfDepth + i * squareSizeZ;
+		float zEnd = zStart + squareSizeZ;
+
+		for (uint32 j = 0; j < squaresPerSide; ++j)
+		{
+			float xStart = -halfWidth + j * squareSizeX;
+			float xEnd = xStart + squareSizeX;
+
+			float texUStart = (float)j / squaresPerSide;
+			float texUEnd = (float)(j + 1) / squaresPerSide;
+			float texVStart = (float)i / squaresPerSide;
+			float texVEnd = (float)(i + 1) / squaresPerSide;
+
+			bool isWhite = (i + j) % 2 == 0;
+			float cellColor = isWhite ? 1.0f : 0.0f;
+
+			uint32 baseIndex = (uint32)meshData.Vertices.size();
+
+			Vertex vTop[4];
+			vTop[0].Position = XMFLOAT3(xStart, yTop, zStart);
+			vTop[1].Position = XMFLOAT3(xStart, yTop, zEnd);
+			vTop[2].Position = XMFLOAT3(xEnd, yTop, zEnd);
+			vTop[3].Position = XMFLOAT3(xEnd, yTop, zStart);
+			for (int k = 0; k < 4; k++) {
+				vTop[k].Normal = XMFLOAT3(0.0f, 1.0f, 0.0f);
+				vTop[k].TangentU = XMFLOAT3(1.0f, 0.0f, 0.0f);
+				vTop[k].Color = XMFLOAT2(cellColor, 1.0f);
+			}
+			vTop[0].TexC = XMFLOAT2(texUStart, texVEnd);
+			vTop[1].TexC = XMFLOAT2(texUStart, texVStart);
+			vTop[2].TexC = XMFLOAT2(texUEnd, texVStart);
+			vTop[3].TexC = XMFLOAT2(texUEnd, texVEnd);
+
+			for (int k = 0; k < 4; k++) meshData.Vertices.push_back(vTop[k]);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 1);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 3);
+			baseIndex += 4;
+
+			Vertex vBottom[4];
+			vBottom[0].Position = XMFLOAT3(xStart, yBottom, zStart);
+			vBottom[1].Position = XMFLOAT3(xStart, yBottom, zEnd);
+			vBottom[2].Position = XMFLOAT3(xEnd, yBottom, zEnd);
+			vBottom[3].Position = XMFLOAT3(xEnd, yBottom, zStart);
+			for (int k = 0; k < 4; k++) {
+				vBottom[k].Normal = XMFLOAT3(0.0f, -1.0f, 0.0f);
+				vBottom[k].TangentU = XMFLOAT3(1.0f, 0.0f, 0.0f);
+				vBottom[k].TexC = XMFLOAT2(0, 0);
+				vBottom[k].Color = XMFLOAT2(cellColor, 0.0f);
+			}
+
+			for (int k = 0; k < 4; k++) meshData.Vertices.push_back(vBottom[k]);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 1);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 3);
+			meshData.Indices32.push_back(baseIndex + 2);
+			baseIndex += 4;
+
+			Vertex vFront[4];
+			vFront[0].Position = XMFLOAT3(xStart, yBottom, zStart);
+			vFront[1].Position = XMFLOAT3(xStart, yTop, zStart);
+			vFront[2].Position = XMFLOAT3(xEnd, yTop, zStart);
+			vFront[3].Position = XMFLOAT3(xEnd, yBottom, zStart);
+			for (int k = 0; k < 4; k++) {
+				vFront[k].Normal = XMFLOAT3(0.0f, 0.0f, -1.0f);
+				vFront[k].TangentU = XMFLOAT3(1.0f, 0.0f, 0.0f);
+				vFront[k].TexC = XMFLOAT2(0, 0);
+				vFront[k].Color = XMFLOAT2(cellColor, 0.5f);
+			}
+
+			for (int k = 0; k < 4; k++) meshData.Vertices.push_back(vFront[k]);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 1);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 3);
+			baseIndex += 4;
+
+			Vertex vBack[4];
+			vBack[0].Position = XMFLOAT3(xStart, yBottom, zEnd);
+			vBack[1].Position = XMFLOAT3(xStart, yTop, zEnd);
+			vBack[2].Position = XMFLOAT3(xEnd, yTop, zEnd);
+			vBack[3].Position = XMFLOAT3(xEnd, yBottom, zEnd);
+			for (int k = 0; k < 4; k++) {
+				vBack[k].Normal = XMFLOAT3(0.0f, 0.0f, 1.0f);
+				vBack[k].TangentU = XMFLOAT3(1.0f, 0.0f, 0.0f);
+				vBack[k].TexC = XMFLOAT2(0, 0);
+				vBack[k].Color = XMFLOAT2(cellColor, 0.5f);
+			}
+
+			for (int k = 0; k < 4; k++) meshData.Vertices.push_back(vBack[k]);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 1);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 3);
+			meshData.Indices32.push_back(baseIndex + 2);
+			baseIndex += 4;
+
+			Vertex vLeft[4];
+			vLeft[0].Position = XMFLOAT3(xStart, yBottom, zStart);
+			vLeft[1].Position = XMFLOAT3(xStart, yTop, zStart);
+			vLeft[2].Position = XMFLOAT3(xStart, yTop, zEnd);
+			vLeft[3].Position = XMFLOAT3(xStart, yBottom, zEnd);
+			for (int k = 0; k < 4; k++) {
+				vLeft[k].Normal = XMFLOAT3(-1.0f, 0.0f, 0.0f);
+				vLeft[k].TangentU = XMFLOAT3(0.0f, 0.0f, 1.0f);
+				vLeft[k].TexC = XMFLOAT2(0, 0);
+				vLeft[k].Color = XMFLOAT2(cellColor, 0.5f);
+			}
+			for (int k = 0; k < 4; k++) meshData.Vertices.push_back(vLeft[k]);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 1);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 3);
+			meshData.Indices32.push_back(baseIndex + 2);
+			baseIndex += 4;
+
+			Vertex vRight[4];
+			vRight[0].Position = XMFLOAT3(xEnd, yBottom, zStart);
+			vRight[1].Position = XMFLOAT3(xEnd, yTop, zStart);
+			vRight[2].Position = XMFLOAT3(xEnd, yTop, zEnd);
+			vRight[3].Position = XMFLOAT3(xEnd, yBottom, zEnd);
+			for (int k = 0; k < 4; k++) {
+				vRight[k].Normal = XMFLOAT3(1.0f, 0.0f, 0.0f);
+				vRight[k].TangentU = XMFLOAT3(0.0f, 0.0f, 1.0f);
+				vRight[k].TexC = XMFLOAT2(0, 0);
+				vRight[k].Color = XMFLOAT2(cellColor, 0.5f);
+			}
+			for (int k = 0; k < 4; k++) meshData.Vertices.push_back(vRight[k]);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 1);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 0);
+			meshData.Indices32.push_back(baseIndex + 2);
+			meshData.Indices32.push_back(baseIndex + 3);
+			baseIndex += 4;
+		}
+	}
+
+	return meshData;
+}

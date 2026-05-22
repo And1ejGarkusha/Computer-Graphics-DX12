@@ -71,7 +71,25 @@ bool OBJLoader::LoadMTL(const std::string& filename,
         else if (prefix == "map_Kd")
         {
             iss >> currentMaterial.DiffuseMapPath;
-            OutputDebugStringA(("Texture: " + currentMaterial.DiffuseMapPath + "\n").c_str());
+            OutputDebugStringA(("Diffuse tex: " + currentMaterial.DiffuseMapPath + "\n").c_str());
+        }
+        else if (prefix == "map_Bump" || prefix == "bump")
+        {
+            std::string token;
+            iss >> token;
+            if (token == "-bm")
+            {
+                float bumpScale;
+                iss >> bumpScale;
+                iss >> token;
+            }
+            currentMaterial.NormalMapPath = token;
+            OutputDebugStringA(("Normal map: " + currentMaterial.NormalMapPath + "\n").c_str());
+        }
+        else if (prefix == "map_Disp")
+        {
+            iss >> currentMaterial.DisplaceMapPath;
+            OutputDebugStringA(("Displacement map: " + currentMaterial.DisplaceMapPath + "\n").c_str());
         }
         else if (prefix == "d")
         {
@@ -150,7 +168,6 @@ bool OBJLoader::Load(const std::string& filename,
             if (t >= 0 && t < (int)texCoords.size())
             {
                 vertex.TexCoord = texCoords[t];
-                vertex.TexCoord.y = 1.0f - vertex.TexCoord.y;
             }
 
             UINT newIndex = (UINT)outMesh.Vertices.size();
@@ -277,5 +294,72 @@ bool OBJLoader::Load(const std::string& filename,
     OutputDebugStringA(("Submeshes: " + std::to_string(outMesh.DrawArgs.size()) + "\n").c_str());
     OutputDebugStringA(("Materials: " + std::to_string(outMaterials.size()) + "\n").c_str());
 
+    ComputeTangents(outMesh);
+    OutputDebugStringA("Tangents computed.\n");
+
     return !outMesh.Vertices.empty();
+}
+void OBJLoader::ComputeTangents(OBJMeshData& mesh)
+{
+    using namespace DirectX;
+
+    const size_t vertCount = mesh.Vertices.size();
+    std::vector<XMFLOAT3> tan1(vertCount, XMFLOAT3(0, 0, 0));
+
+    for (size_t i = 0; i + 2 < mesh.Indices.size(); i += 3)
+    {
+        uint32_t i0 = mesh.Indices[i];
+        uint32_t i1 = mesh.Indices[i + 1];
+        uint32_t i2 = mesh.Indices[i + 2];
+
+        const XMFLOAT3& p0 = mesh.Vertices[i0].Position;
+        const XMFLOAT3& p1 = mesh.Vertices[i1].Position;
+        const XMFLOAT3& p2 = mesh.Vertices[i2].Position;
+
+        const XMFLOAT2& uv0 = mesh.Vertices[i0].TexCoord;
+        const XMFLOAT2& uv1 = mesh.Vertices[i1].TexCoord;
+        const XMFLOAT2& uv2 = mesh.Vertices[i2].TexCoord;
+
+        float dx1 = p1.x - p0.x, dy1 = p1.y - p0.y, dz1 = p1.z - p0.z;
+        float dx2 = p2.x - p0.x, dy2 = p2.y - p0.y, dz2 = p2.z - p0.z;
+
+        float du1 = uv1.x - uv0.x, dv1 = uv1.y - uv0.y;
+        float du2 = uv2.x - uv0.x, dv2 = uv2.y - uv0.y;
+
+        float det = du1 * dv2 - du2 * dv1;
+        if (fabsf(det) < 1e-8f) continue;
+
+        float r = 1.0f / det;
+        XMFLOAT3 tangent(
+            r * (dv2 * dx1 - dv1 * dx2),
+            r * (dv2 * dy1 - dv1 * dy2),
+            r * (dv2 * dz1 - dv1 * dz2));
+
+        for (uint32_t idx : { i0, i1, i2 })
+        {
+            tan1[idx].x += tangent.x;
+            tan1[idx].y += tangent.y;
+            tan1[idx].z += tangent.z;
+        }
+    }
+
+    for (size_t i = 0; i < vertCount; ++i)
+    {
+        XMVECTOR N = XMLoadFloat3(&mesh.Vertices[i].Normal);
+        XMVECTOR T = XMLoadFloat3(&tan1[i]);
+
+        if (XMVector3Equal(T, XMVectorZero()))
+        {
+            XMVECTOR up = XMVectorSet(0, 1, 0, 0);
+            if (fabsf(XMVectorGetX(XMVector3Dot(N, up))) > 0.99f)
+                up = XMVectorSet(1, 0, 0, 0);
+            T = XMVector3Normalize(XMVector3Cross(N, up));
+        }
+        else
+        {
+            T = XMVector3Normalize(T - N * XMVector3Dot(N, T));
+        }
+
+        XMStoreFloat3(&mesh.Vertices[i].Tangent, T);
+    }
 }

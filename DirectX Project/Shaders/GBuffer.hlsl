@@ -1,12 +1,16 @@
-Texture2D    gDiffuseMap : register(t0);
-SamplerState gsamLinear  : register(s2);
+Texture2D gDiffuseMap : register(t0); // albedo / diffuse
+Texture2D gNormalMap : register(t1); // tangent-space normal map
+Texture2D gDisplaceMap : register(t2); // grayscale displacement
+
+SamplerState gsamLinearWrap : register(s2);
+SamplerState gsamLinearClamp : register(s3);
 
 cbuffer cbPerObject : register(b0)
 {
     float4x4 gWorld;
     float4x4 gTexTransform;
-    int      gIsChessboard;
-    float3   gPad;
+    int gIsChessboard;
+    float3 gPad;
 };
 
 cbuffer cbPass : register(b1)
@@ -17,62 +21,89 @@ cbuffer cbPass : register(b1)
     float4x4 gInvProj;
     float4x4 gViewProj;
     float4x4 gInvViewProj;
-    float3   gEyePosW;
-    float    cbPerObjectPad1;
-    float2   gRenderTargetSize;
-    float2   gInvRenderTargetSize;
-    float    gNearZ;
-    float    gFarZ;
-    float    gTotalTime;
-    float    gDeltaTime;
-    float4   gAmbientLight;
-    float4   gLightsPad[48];
+    float3 gEyePosW;
+    float cbPerObjectPad1;
+    float2 gRenderTargetSize;
+    float2 gInvRenderTargetSize;
+    float gNearZ;
+    float gFarZ;
+    float gTotalTime;
+    float gDeltaTime;
+    float4 gAmbientLight;
+    float4 gLightsPad[48];
 };
 
 cbuffer cbMaterial : register(b2)
 {
-    float4   gDiffuseAlbedo;
-    float3   gFresnelR0;
-    float    gRoughness;
+    float4 gDiffuseAlbedo;
+    float3 gFresnelR0;
+    float gRoughness;
     float4x4 gMatTransform;
+
+    float gDispScale;
+    float3 gMatPad;
 };
+
+static const float gTessMinDist = 0.0f;
+static const float gTessMaxDist = 25.0f;
+static const float gTessMinFactor = 1.0f;
+static const float gTessMaxFactor = 64.0f;
 
 struct VertexIn
 {
-    float3 PosL    : POSITION;
+    float3 PosL : POSITION;
     float3 NormalL : NORMAL;
-    float2 TexC    : TEXCOORD;
-    float2 Color   : COLOR;
+    float2 TexC : TEXCOORD0;
+    float3 TangentL : TANGENT;
+    float2 Color : COLOR;
 };
 
 struct VertexOut
 {
-    float4 PosH    : SV_POSITION;
-    float3 PosW    : POSITION;
+    float3 PosW : POSITION;
     float3 NormalW : NORMAL;
-    float2 TexC    : TEXCOORD;
+    float2 TexC : TEXCOORD0;
+    float3 PosL : TEXCOORD1;
+    float3 NormalL : TEXCOORD2;
+    float3 TangentW : TEXCOORD3;
+};
+
+struct PatchTess
+{
+    float EdgeTess[3] : SV_TessFactor;
+    float InsideTess : SV_InsideTessFactor;
+};
+
+struct DomainOut
+{
+    float4 PosH : SV_POSITION;
+    float3 PosW : POSITION;
+    float3 NormalW : NORMAL;
+    float2 TexC : TEXCOORD0;
+    float3 TangentW : TEXCOORD1;
 };
 
 struct GBufferOut
 {
-    float4 Albedo   : SV_Target0;
-    float4 Normal   : SV_Target1;
+    float4 Albedo : SV_Target0;
+    float4 Normal : SV_Target1;
     float4 Position : SV_Target2;
 };
 
 VertexOut VS(VertexIn vin)
 {
-    VertexOut vout = (VertexOut)0.0f;
-    
+    VertexOut vout = (VertexOut) 0.0f;
+
     float3 pos = vin.PosL;
+    
     if (gIsChessboard == 1)
     {
-        float speed         = 1.0f;
-        float maxExtraH     = 0.35f;
-        float t             = abs(sin(gTotalTime * speed));
-        float origBottom    = -0.05f;
-        float origTop       =  0.05f;
-        float origHeight    =  0.10f;
+        float speed = 1.0f;
+        float maxExtraH = 0.35f;
+        float t = abs(sin(gTotalTime * speed));
+        float origBottom = -0.05f;
+        float origTop = 0.05f;
+        float origHeight = 0.10f;
 
         if (vin.Color.x == 0.0f)
         {
@@ -86,22 +117,105 @@ VertexOut VS(VertexIn vin)
         }
     }
 
-    float4 posW    = mul(float4(pos, 1.0f), gWorld);
-    vout.PosW      = posW.xyz;
-    vout.NormalW   = mul(vin.NormalL, (float3x3)gWorld);
-    vout.PosH      = mul(posW, gViewProj);
+    float4 posW = mul(float4(pos, 1.0f), gWorld);
+    vout.PosW = posW.xyz;
+    vout.NormalW = normalize(mul(vin.NormalL, (float3x3) gWorld));
+    vout.TangentW = normalize(mul(vin.TangentL, (float3x3) gWorld));
 
-    float4 texC    = mul(float4(vin.TexC, 0.0f, 1.0f), gTexTransform);
-    vout.TexC      = mul(texC, gMatTransform).xy;
+    float4 texC = mul(float4(vin.TexC, 0.0f, 1.0f), gTexTransform);
+    vout.TexC = mul(texC, gMatTransform).xy;
+
+    vout.PosL = pos;
+    vout.NormalL = vin.NormalL;
 
     return vout;
 }
 
-GBufferOut PS(VertexOut pin)
+PatchTess ConstantHS(InputPatch<VertexOut, 3> patch,
+                     uint patchID : SV_PrimitiveID)
 {
-    float4 diffuse = gDiffuseMap.Sample(gsamLinear, pin.TexC) * gDiffuseAlbedo;
-    float3 normalW = normalize(pin.NormalW);
+    PatchTess pt;
 
+    float3 e0mid = (patch[1].PosW + patch[2].PosW) * 0.5f;
+    float3 e1mid = (patch[2].PosW + patch[0].PosW) * 0.5f;
+    float3 e2mid = (patch[0].PosW + patch[1].PosW) * 0.5f;
+    float3 cent = (patch[0].PosW + patch[1].PosW + patch[2].PosW) / 3.0f;
+
+    float d0 = distance(e0mid, gEyePosW);
+    float d1 = distance(e1mid, gEyePosW);
+    float d2 = distance(e2mid, gEyePosW);
+    float dc = distance(cent, gEyePosW);
+
+    float range = gTessMaxDist - gTessMinDist;
+
+    pt.EdgeTess[0] = lerp(gTessMaxFactor, gTessMinFactor, saturate((d0 - gTessMinDist) / range));
+    pt.EdgeTess[1] = lerp(gTessMaxFactor, gTessMinFactor, saturate((d1 - gTessMinDist) / range));
+    pt.EdgeTess[2] = lerp(gTessMaxFactor, gTessMinFactor, saturate((d2 - gTessMinDist) / range));
+    pt.InsideTess = lerp(gTessMaxFactor, gTessMinFactor, saturate((dc - gTessMinDist) / range));
+
+    return pt;
+}
+
+[domain("tri")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("ConstantHS")]
+[maxtessfactor(16.0f)]
+VertexOut HS(InputPatch<VertexOut, 3> p,
+             uint i : SV_OutputControlPointID,
+             uint patchID : SV_PrimitiveID)
+{
+    return p[i];
+}
+
+[domain("tri")]
+DomainOut DS(PatchTess patchTess,
+             float3 bary : SV_DomainLocation,
+             const OutputPatch<VertexOut, 3> tri)
+{
+    DomainOut dout;
+    
+    float3 posL = bary.x * tri[0].PosL + bary.y * tri[1].PosL + bary.z * tri[2].PosL;
+    float3 normL = bary.x * tri[0].NormalL + bary.y * tri[1].NormalL + bary.z * tri[2].NormalL;
+    float2 texC = bary.x * tri[0].TexC + bary.y * tri[1].TexC + bary.z * tri[2].TexC;
+    float3 tanW = bary.x * tri[0].TangentW + bary.y * tri[1].TangentW + bary.z * tri[2].TangentW;
+
+    normL = normalize(normL);
+    
+    if (gDispScale > 0.0f)
+    {
+        float height = gDisplaceMap.SampleLevel(gsamLinearWrap, texC, 0).r;
+        posL += normL * (height - 0.5f) * gDispScale;
+    }
+    
+    float4 posW = mul(float4(posL, 1.0f), gWorld);
+    float3 normW = normalize(mul(normL, (float3x3) gWorld));
+    tanW = normalize(tanW);
+
+    dout.PosW = posW.xyz;
+    dout.NormalW = normW;
+    dout.TangentW = tanW;
+    dout.TexC = texC;
+    dout.PosH = mul(float4(posW.xyz, 1.0f), gViewProj);
+
+    return dout;
+}
+
+GBufferOut PS(DomainOut pin)
+{
+    float4 diffuse = gDiffuseMap.Sample(gsamLinearWrap, pin.TexC) * gDiffuseAlbedo;
+    
+    float3 N = normalize(pin.NormalW);
+    float3 T = normalize(pin.TangentW - dot(pin.TangentW, N) * N);
+    float3 B = cross(N, T);
+    float3x3 TBN = float3x3(T, B, N);
+    
+    float3 normalSample = gNormalMap.Sample(gsamLinearWrap, pin.TexC).rgb;
+    float3 bumpNormal = normalSample * 2.0f - 1.0f;
+    
+    float3 normalW = normalize(mul(bumpNormal, TBN));
+    
     GBufferOut gout;
     gout.Albedo = float4(diffuse.rgb, gRoughness);
     gout.Normal = float4(normalW, gFresnelR0.x);

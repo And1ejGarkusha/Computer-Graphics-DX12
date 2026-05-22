@@ -62,7 +62,8 @@ void RenderingSystem::BeginGeometryPass(
     cmdList->ClearDepthStencilView(dsv,
         D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
-    cmdList->SetPipelineState(mGeometryPSO.Get());
+    cmdList->SetPipelineState(
+        mWireframeMode ? mGeometryWireframePSO.Get() : mGeometryPSO.Get());
 }
 
 void RenderingSystem::EndGeometryPass(ID3D12GraphicsCommandList* cmdList)
@@ -161,29 +162,38 @@ void RenderingSystem::BuildPSOs(
 {
     mGeometryInputLayout =
     {
-        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "COLOR",    0, DXGI_FORMAT_R32G32_FLOAT,    0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT",  0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32_FLOAT,    0, 44, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
     auto vsGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "VS", "vs_5_0");
+    auto hsGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "HS", "hs_5_0");
+    auto dsGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "DS", "ds_5_0");
     auto psGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "PS", "ps_5_0");
+
     auto vsLit = d3dUtil::CompileShader(L"Shaders\\DeferredLighting.hlsl", nullptr, "VS", "vs_5_0");
     auto psLit = d3dUtil::CompileShader(L"Shaders\\DeferredLighting.hlsl", nullptr, "PS", "ps_5_0");
 
     {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
-        desc.InputLayout = { mGeometryInputLayout.data(),
-                                       (UINT)mGeometryInputLayout.size() };
+        desc.InputLayout = { mGeometryInputLayout.data(), (UINT)mGeometryInputLayout.size() };
         desc.pRootSignature = geometryRootSig;
+
         desc.VS = { reinterpret_cast<BYTE*>(vsGeo->GetBufferPointer()), vsGeo->GetBufferSize() };
+        desc.HS = { reinterpret_cast<BYTE*>(hsGeo->GetBufferPointer()), hsGeo->GetBufferSize() };
+        desc.DS = { reinterpret_cast<BYTE*>(dsGeo->GetBufferPointer()), dsGeo->GetBufferSize() };
         desc.PS = { reinterpret_cast<BYTE*>(psGeo->GetBufferPointer()), psGeo->GetBufferSize() };
+
         desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
         desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
         desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
         desc.SampleMask = UINT_MAX;
-        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+
         desc.NumRenderTargets = GBuffer::NumRTs;
         desc.RTVFormats[0] = GBuffer::AlbedoFormat;
         desc.RTVFormats[1] = GBuffer::NormalFormat;
@@ -194,7 +204,16 @@ void RenderingSystem::BuildPSOs(
 
         ThrowIfFailed(device->CreateGraphicsPipelineState(
             &desc, IID_PPV_ARGS(mGeometryPSO.GetAddressOf())));
-        mGeometryPSO->SetName(L"Geometry Pass PSO");
+        mGeometryPSO->SetName(L"Geometry Pass PSO (tessellated)");
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC wireDesc = desc;
+        D3D12_RASTERIZER_DESC wireRaster = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+        wireRaster.FillMode = D3D12_FILL_MODE_WIREFRAME;
+        wireRaster.CullMode = D3D12_CULL_MODE_NONE;
+        wireDesc.RasterizerState = wireRaster;
+        ThrowIfFailed(device->CreateGraphicsPipelineState(
+            &wireDesc, IID_PPV_ARGS(mGeometryWireframePSO.GetAddressOf())));
+        mGeometryWireframePSO->SetName(L"Geometry Pass PSO (wireframe)");
     }
 
     {

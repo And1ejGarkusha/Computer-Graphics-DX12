@@ -42,7 +42,11 @@ public:
         ID3D12DescriptorHeap* srvHeap,
         D3D12_GPU_VIRTUAL_ADDRESS  passCBAddress);
 
+    void ToggleWireframe() { mWireframeMode = !mWireframeMode; }
+    bool IsWireframe()     const { return mWireframeMode; }
+
     ID3D12RootSignature* GetLightingRootSig()   const { return mLightingRootSig.Get(); }
+
     ID3D12PipelineState* GetGeometryPSO()       const { return mGeometryPSO.Get(); }
     ID3D12PipelineState* GetLightingPSO()       const { return mLightingPSO.Get(); }
     const GBuffer& GetGBuffer()           const { return mGBuffer; }
@@ -61,7 +65,10 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12RootSignature>  mLightingRootSig;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>  mGeometryPSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>  mGeometryWireframePSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>  mLightingPSO;
+
+    bool mWireframeMode = false;
 
     UINT mRtvDescSize = 0;
     UINT mSrvDescSize = 0;

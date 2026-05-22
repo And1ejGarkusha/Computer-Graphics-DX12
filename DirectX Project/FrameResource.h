@@ -38,14 +38,15 @@ struct Vertex
 {
     DirectX::XMFLOAT3 Pos;
     DirectX::XMFLOAT3 Normal;
-	DirectX::XMFLOAT2 TexC;
+    DirectX::XMFLOAT2 TexC;
+    DirectX::XMFLOAT3 Tangent;
     DirectX::XMFLOAT2 Color;
 };
- 
+
 struct FrameResource
 {
 public:
-    
+
     FrameResource(ID3D12Device* device, UINT passCount, UINT objectCount, UINT materialCount);
     FrameResource(const FrameResource& rhs) = delete;
     FrameResource& operator=(const FrameResource& rhs) = delete;

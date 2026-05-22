@@ -9,6 +9,7 @@ struct OBJVertexData
     DirectX::XMFLOAT3 Position;
     DirectX::XMFLOAT3 Normal;
     DirectX::XMFLOAT2 TexCoord;
+    DirectX::XMFLOAT3 Tangent;
 };
 
 struct OBJMaterialData
@@ -17,7 +18,10 @@ struct OBJMaterialData
     DirectX::XMFLOAT4 DiffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
     DirectX::XMFLOAT3 FresnelR0 = { 0.05f, 0.05f, 0.05f };
     float Roughness = 0.5f;
+
     std::string DiffuseMapPath;
+    std::string NormalMapPath;
+    std::string DisplaceMapPath;
 };
 
 struct OBJMeshData
@@ -38,4 +42,6 @@ public:
 private:
     static bool LoadMTL(const std::string& filename,
         std::vector<OBJMaterialData>& outMaterials);
+
+    static void ComputeTangents(OBJMeshData& mesh);
 };

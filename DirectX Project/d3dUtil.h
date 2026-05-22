@@ -27,54 +27,54 @@ extern const int gNumFrameResources;
 
 inline void d3dSetDebugName(IDXGIObject* obj, const char* name)
 {
-    if(obj)
-    {
-        obj->SetPrivateData(WKPDID_D3DDebugObjectName, lstrlenA(name), name);
-    }
+	if (obj)
+	{
+		obj->SetPrivateData(WKPDID_D3DDebugObjectName, lstrlenA(name), name);
+	}
 }
 inline void d3dSetDebugName(ID3D12Device* obj, const char* name)
 {
-    if(obj)
-    {
-        obj->SetPrivateData(WKPDID_D3DDebugObjectName, lstrlenA(name), name);
-    }
+	if (obj)
+	{
+		obj->SetPrivateData(WKPDID_D3DDebugObjectName, lstrlenA(name), name);
+	}
 }
 inline void d3dSetDebugName(ID3D12DeviceChild* obj, const char* name)
 {
-    if(obj)
-    {
-        obj->SetPrivateData(WKPDID_D3DDebugObjectName, lstrlenA(name), name);
-    }
+	if (obj)
+	{
+		obj->SetPrivateData(WKPDID_D3DDebugObjectName, lstrlenA(name), name);
+	}
 }
 
 inline std::wstring AnsiToWString(const std::string& str)
 {
-    WCHAR buffer[512];
-    MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, buffer, 512);
-    return std::wstring(buffer);
+	WCHAR buffer[512];
+	MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, buffer, 512);
+	return std::wstring(buffer);
 }
 
 class d3dUtil
 {
 public:
 
-    static bool IsKeyDown(int vkeyCode);
+	static bool IsKeyDown(int vkeyCode);
 
-    static std::string ToString(HRESULT hr);
+	static std::string ToString(HRESULT hr);
 
-    static UINT CalcConstantBufferByteSize(UINT byteSize)
-    {
-        return (byteSize + 255) & ~255;
-    }
+	static UINT CalcConstantBufferByteSize(UINT byteSize)
+	{
+		return (byteSize + 255) & ~255;
+	}
 
-    static Microsoft::WRL::ComPtr<ID3DBlob> LoadBinary(const std::wstring& filename);
+	static Microsoft::WRL::ComPtr<ID3DBlob> LoadBinary(const std::wstring& filename);
 
-    static Microsoft::WRL::ComPtr<ID3D12Resource> CreateDefaultBuffer(
-        ID3D12Device* device,
-        ID3D12GraphicsCommandList* cmdList,
-        const void* initData,
-        UINT64 byteSize,
-        Microsoft::WRL::ComPtr<ID3D12Resource>& uploadBuffer);
+	static Microsoft::WRL::ComPtr<ID3D12Resource> CreateDefaultBuffer(
+		ID3D12Device* device,
+		ID3D12GraphicsCommandList* cmdList,
+		const void* initData,
+		UINT64 byteSize,
+		Microsoft::WRL::ComPtr<ID3D12Resource>& uploadBuffer);
 
 	static Microsoft::WRL::ComPtr<ID3DBlob> CompileShader(
 		const std::wstring& filename,
@@ -86,15 +86,15 @@ public:
 class DxException
 {
 public:
-    DxException() = default;
-    DxException(HRESULT hr, const std::wstring& functionName, const std::wstring& filename, int lineNumber);
+	DxException() = default;
+	DxException(HRESULT hr, const std::wstring& functionName, const std::wstring& filename, int lineNumber);
 
-    std::wstring ToString()const;
+	std::wstring ToString()const;
 
-    HRESULT ErrorCode = S_OK;
-    std::wstring FunctionName;
-    std::wstring Filename;
-    int LineNumber = -1;
+	HRESULT ErrorCode = S_OK;
+	std::wstring FunctionName;
+	std::wstring Filename;
+	int LineNumber = -1;
 };
 
 struct SubmeshGeometry
@@ -109,9 +109,9 @@ struct SubmeshGeometry
 struct MeshGeometry
 {
 	std::string Name;
- 
+
 	Microsoft::WRL::ComPtr<ID3DBlob> VertexBufferCPU = nullptr;
-	Microsoft::WRL::ComPtr<ID3DBlob> IndexBufferCPU  = nullptr;
+	Microsoft::WRL::ComPtr<ID3DBlob> IndexBufferCPU = nullptr;
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> VertexBufferGPU = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12Resource> IndexBufferGPU = nullptr;
@@ -155,12 +155,12 @@ struct MeshGeometry
 
 struct Light
 {
-    DirectX::XMFLOAT3 Strength = { 0.5f, 0.5f, 0.5f };
-    float FalloffStart = 1.0f;
-    DirectX::XMFLOAT3 Direction = { 0.0f, -1.0f, 0.0f };
-    float FalloffEnd = 10.0f;
-    DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };
-    float SpotPower = 64.0f;
+	DirectX::XMFLOAT3 Strength = { 0.5f, 0.5f, 0.5f };
+	float FalloffStart = 1.0f;
+	DirectX::XMFLOAT3 Direction = { 0.0f, -1.0f, 0.0f };
+	float FalloffEnd = 10.0f;
+	DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };
+	float SpotPower = 64.0f;
 };
 
 #define MaxLights 16
@@ -172,6 +172,9 @@ struct MaterialConstants
 	float Roughness = 0.25f;
 
 	DirectX::XMFLOAT4X4 MatTransform = MathHelper::Identity4x4();
+
+	float DispScale = 0.0f;
+	DirectX::XMFLOAT3 Padding = { 0.0f, 0.0f, 0.0f };
 };
 
 struct Material
@@ -184,12 +187,16 @@ struct Material
 
 	int NormalSrvHeapIndex = -1;
 
+	int DispSrvHeapIndex = -1;
+
 	int NumFramesDirty = gNumFrameResources;
 
 	DirectX::XMFLOAT4 DiffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
 	DirectX::XMFLOAT3 FresnelR0 = { 0.01f, 0.01f, 0.01f };
 	float Roughness = .25f;
 	DirectX::XMFLOAT4X4 MatTransform = MathHelper::Identity4x4();
+
+	float DispScale = 0.0f;
 };
 
 struct Texture

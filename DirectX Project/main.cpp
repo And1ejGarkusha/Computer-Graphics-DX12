@@ -6,7 +6,9 @@
 #include "OBJLoader.h"
 #include "GBuffer.h"
 #include "RenderingSystem.h"
+#include "Octree.h"
 #include <fstream>
+#include <random>
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -32,6 +34,8 @@ static const int kDefaultNormalSlot = 2;
 static const int kDefaultDispSlot = 3;
 static const int kObjTexBaseSlot = 4;
 
+static const int kNumScatteredObjects = 2000;
+
 struct RenderItem
 {
 	RenderItem() = default;
@@ -51,6 +55,8 @@ struct RenderItem
 	UINT IndexCount = 0;
 	UINT StartIndexLocation = 0;
 	int  BaseVertexLocation = 0;
+
+	BoundingBox WorldBounds = BoundingBox(XMFLOAT3(0, 0, 0), XMFLOAT3(FLT_MAX, FLT_MAX, FLT_MAX));
 };
 
 class CrateApp : public D3DApp
@@ -88,6 +94,14 @@ private:
 	void BuildFrameResources();
 	void BuildMaterials();
 	void BuildRenderItems();
+
+	void BuildOctree();
+	static BoundingBox ComputeWorldBounds(
+		const std::vector<Vertex>& vertices,
+		const std::vector<std::uint32_t>& indices,
+		UINT startIndex, UINT indexCount, INT baseVertex,
+		CXMMATRIX world);
+
 	void DrawRenderItems(ID3D12GraphicsCommandList* cmdList,
 		const std::vector<RenderItem*>& ritems);
 
@@ -130,6 +144,13 @@ private:
 	std::vector<std::unique_ptr<RenderItem>> mAllRitems;
 	std::vector<RenderItem*>                 mOpaqueRitems;
 
+	std::vector<RenderItem*> mVisibleRitems;
+	Octree                   mOctree;
+	bool mFrustumCullingEnabled = false;
+	bool mOctreeCullingEnabled = false;
+	bool mWasNDown = false;
+	bool mWasMDown = false;
+
 	PassConstants mMainPassCB;
 
 	XMFLOAT3   mEyePos = { 0.0f, 0.0f, 0.0f };
@@ -154,6 +175,10 @@ private:
 	POINT mCenterScreen;
 
 	bool mWasZDown = false;
+
+	UINT  mFrameCount = 0;
+	float mFpsAccumulator = 0.0f;
+	UINT  mFps = 0;
 };
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
@@ -210,6 +235,8 @@ bool CrateApp::Initialize()
 	BuildFrameResources();
 	BuildPSOs();
 
+	BuildOctree();
+
 	mRenderingSystem.Initialize(
 		md3dDevice.Get(),
 		mBackBufferFormat,
@@ -252,6 +279,17 @@ void CrateApp::Update(const GameTimer& gt)
 	OnKeyboardInput(gt);
 	UpdateCamera(gt);
 
+	char title[256];
+	sprintf_s(title,
+		"DX12 - fps: %.1f | visible: %zu / %zu | Simple FC: %s | Octree FC: %s",
+		1.0f / gt.DeltaTime(),
+		mVisibleRitems.size(),
+		mOpaqueRitems.size(),
+		mFrustumCullingEnabled ? "ON" : "OFF",
+		mOctreeCullingEnabled ? "ON" : "OFF");
+
+	SetWindowTextA(mhMainWnd, title);
+
 	mCurrFrameResourceIndex = (mCurrFrameResourceIndex + 1) % gNumFrameResources;
 	mCurrFrameResource = mFrameResources[mCurrFrameResourceIndex].get();
 
@@ -278,6 +316,44 @@ void CrateApp::Draw(const GameTimer& gt)
 	ThrowIfFailed(mCommandList->Reset(cmdListAlloc.Get(),
 		mRenderingSystem.GetGeometryPSO()));
 
+	BoundingFrustum frustum;
+	BoundingFrustum::CreateFromMatrix(frustum, XMLoadFloat4x4(&mProj));
+	{
+		XMVECTOR det;
+		XMMATRIX invView = XMMatrixInverse(&det, XMLoadFloat4x4(&mView));
+		frustum.Transform(frustum, invView);
+	}
+
+	if (mOctreeCullingEnabled)
+	{
+		static std::vector<UINT> visIdx;
+		mOctree.Query(frustum, visIdx);
+
+		mVisibleRitems.clear();
+		mVisibleRitems.reserve(visIdx.size());
+		for (UINT i : visIdx)
+			mVisibleRitems.push_back(mOpaqueRitems[i]);
+	}
+	else if (mFrustumCullingEnabled)
+	{
+		mVisibleRitems.clear();
+		mVisibleRitems.reserve(mOpaqueRitems.size());
+		for (auto* ri : mOpaqueRitems)
+		{
+			if (frustum.Intersects(ri->WorldBounds))
+				mVisibleRitems.push_back(ri);
+		}
+	}
+	else
+	{
+		mVisibleRitems = mOpaqueRitems;
+	}
+	static int debugFrameCounter = 0;
+	if (++debugFrameCounter % 60 == 0)
+	{
+		OutputDebugStringA(("Visible: " + std::to_string(mVisibleRitems.size()) +
+			" of " + std::to_string(mOpaqueRitems.size()) + "\n").c_str());
+	}
 	mRenderingSystem.BeginGeometryPass(
 		mCommandList.Get(),
 		DepthStencilView(),
@@ -292,7 +368,7 @@ void CrateApp::Draw(const GameTimer& gt)
 	mCommandList->SetGraphicsRootConstantBufferView(kRootPassCB,
 		passCB->GetGPUVirtualAddress());
 
-	DrawRenderItems(mCommandList.Get(), mOpaqueRitems);
+	DrawRenderItems(mCommandList.Get(), mVisibleRitems);
 
 	mRenderingSystem.EndGeometryPass(mCommandList.Get());
 
@@ -469,8 +545,237 @@ void CrateApp::BuildShadersAndInputLayout()
 	};
 }
 
-void CrateApp::BuildPSOs()
+void CrateApp::BuildPSOs() {}
+
+void CrateApp::BuildShapeGeometry()
 {
+	GeometryGenerator geoGen;
+
+	{
+		auto chessboard = geoGen.CreateChessboard(5.0f, 5.0f, 8, 0.0f);
+
+		SubmeshGeometry sub;
+		sub.IndexCount = (UINT)chessboard.Indices32.size();
+		sub.StartIndexLocation = 0;
+		sub.BaseVertexLocation = 0;
+
+		std::vector<Vertex> verts(chessboard.Vertices.size());
+		for (size_t i = 0; i < verts.size(); ++i)
+		{
+			verts[i].Pos = chessboard.Vertices[i].Position;
+			verts[i].Normal = chessboard.Vertices[i].Normal;
+			verts[i].TexC = chessboard.Vertices[i].TexC;
+			verts[i].Color = chessboard.Vertices[i].Color;
+		}
+		auto& inds = chessboard.Indices32;
+
+		const UINT vbBytes = (UINT)verts.size() * sizeof(Vertex);
+		const UINT ibBytes = (UINT)inds.size() * sizeof(std::uint32_t);
+
+		auto geo = std::make_unique<MeshGeometry>();
+		geo->Name = "chessboardGeo";
+		ThrowIfFailed(D3DCreateBlob(vbBytes, &geo->VertexBufferCPU));
+		CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), verts.data(), vbBytes);
+		ThrowIfFailed(D3DCreateBlob(ibBytes, &geo->IndexBufferCPU));
+		CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), inds.data(), ibBytes);
+		geo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+			mCommandList.Get(), verts.data(), vbBytes, geo->VertexBufferUploader);
+		geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+			mCommandList.Get(), inds.data(), ibBytes, geo->IndexBufferUploader);
+		geo->VertexByteStride = sizeof(Vertex);
+		geo->VertexBufferByteSize = vbBytes;
+		geo->IndexFormat = DXGI_FORMAT_R32_UINT;
+		geo->IndexBufferByteSize = ibBytes;
+		geo->DrawArgs["chessboard"] = sub;
+		mGeometries[geo->Name] = std::move(geo);
+	}
+
+	{
+		auto box = geoGen.CreateBox(1.0f, 1.0f, 1.0f, 0);
+
+		SubmeshGeometry sub;
+		sub.IndexCount = (UINT)box.Indices32.size();
+		sub.StartIndexLocation = 0;
+		sub.BaseVertexLocation = 0;
+
+		std::vector<Vertex> verts(box.Vertices.size());
+		for (size_t i = 0; i < verts.size(); ++i)
+		{
+			verts[i].Pos = box.Vertices[i].Position;
+			verts[i].Normal = box.Vertices[i].Normal;
+			verts[i].TexC = box.Vertices[i].TexC;
+			verts[i].Tangent = box.Vertices[i].TangentU;
+		}
+		auto& inds = box.Indices32;
+
+		const UINT vbBytes = (UINT)verts.size() * sizeof(Vertex);
+		const UINT ibBytes = (UINT)inds.size() * sizeof(std::uint32_t);
+
+		auto geo = std::make_unique<MeshGeometry>();
+		geo->Name = "boxGeo";
+		ThrowIfFailed(D3DCreateBlob(vbBytes, &geo->VertexBufferCPU));
+		CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), verts.data(), vbBytes);
+		ThrowIfFailed(D3DCreateBlob(ibBytes, &geo->IndexBufferCPU));
+		CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), inds.data(), ibBytes);
+		geo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+			mCommandList.Get(), verts.data(), vbBytes, geo->VertexBufferUploader);
+		geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+			mCommandList.Get(), inds.data(), ibBytes, geo->IndexBufferUploader);
+		geo->VertexByteStride = sizeof(Vertex);
+		geo->VertexBufferByteSize = vbBytes;
+		geo->IndexFormat = DXGI_FORMAT_R32_UINT;
+		geo->IndexBufferByteSize = ibBytes;
+		geo->DrawArgs["box"] = sub;
+		mGeometries[geo->Name] = std::move(geo);
+	}
+}
+
+void CrateApp::BuildMaterials()
+{
+	{
+		auto woodCrate = std::make_unique<Material>();
+		woodCrate->Name = "woodCrate";
+		woodCrate->MatCBIndex = 0;
+		woodCrate->DiffuseSrvHeapIndex = 0;
+		woodCrate->NormalSrvHeapIndex = kDefaultNormalSlot;
+		woodCrate->DispSrvHeapIndex = kDefaultDispSlot;
+		woodCrate->DiffuseAlbedo = XMFLOAT4(1, 1, 1, 1);
+		woodCrate->FresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
+		woodCrate->Roughness = 0.2f;
+		woodCrate->DispScale = 0.0f;
+		mMaterials["woodCrate"] = std::move(woodCrate);
+	}
+
+	{
+		auto chess = std::make_unique<Material>();
+		chess->Name = "chessboard";
+		chess->MatCBIndex = 1;
+		chess->DiffuseSrvHeapIndex = 1;
+		chess->NormalSrvHeapIndex = kDefaultNormalSlot;
+		chess->DispSrvHeapIndex = kDefaultDispSlot;
+		chess->DiffuseAlbedo = XMFLOAT4(1, 1, 1, 1);
+		chess->FresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
+		chess->Roughness = 0.5f;
+		chess->DispScale = 0.0f;
+		mMaterials["chessboard"] = std::move(chess);
+	}
+
+	{
+		auto boxMat = std::make_unique<Material>();
+		boxMat->Name = "boxMat";
+		boxMat->MatCBIndex = 2;
+		boxMat->DiffuseSrvHeapIndex = 0;
+		boxMat->NormalSrvHeapIndex = kDefaultNormalSlot;
+		boxMat->DispSrvHeapIndex = kDefaultDispSlot;
+		boxMat->DiffuseAlbedo = XMFLOAT4(0.8f, 0.6f, 0.3f, 1.0f);
+		boxMat->FresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
+		boxMat->Roughness = 0.6f;
+		boxMat->DispScale = 0.0f;
+		mMaterials["boxMat"] = std::move(boxMat);
+	}
+}
+
+void CrateApp::BuildRenderItems()
+{
+	{
+		auto item = std::make_unique<RenderItem>();
+		item->ObjCBIndex = (UINT)mAllRitems.size();
+		item->NumFramesDirty = gNumFrameResources;
+		item->Mat = mMaterials["chessboard"].get();
+		item->Geo = mGeometries["chessboardGeo"].get();
+		item->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+		item->IndexCount = item->Geo->DrawArgs["chessboard"].IndexCount;
+		item->StartIndexLocation = item->Geo->DrawArgs["chessboard"].StartIndexLocation;
+		item->BaseVertexLocation = item->Geo->DrawArgs["chessboard"].BaseVertexLocation;
+
+		XMMATRIX world = XMMatrixTranslation(0.0f, 3.0f, 0.0f);
+		XMStoreFloat4x4(&item->World, world);
+
+		BoundingBox localBounds(XMFLOAT3(0, 0, 0), XMFLOAT3(2.5f, 0.02f, 2.5f));
+		localBounds.Transform(item->WorldBounds, world);
+
+		mAllRitems.push_back(std::move(item));
+	}
+
+	{
+		std::mt19937 rng(12345u);
+		std::uniform_real_distribution<float> distXZ(-80.0f, 80.0f);
+		std::uniform_real_distribution<float> distScale(0.3f, 2.0f);
+		std::uniform_real_distribution<float> distRotY(0.0f, XM_2PI);
+
+		const BoundingBox localBoxBounds(XMFLOAT3(0, 0, 0), XMFLOAT3(0.5f, 0.5f, 0.5f));
+
+		auto* boxGeo = mGeometries["boxGeo"].get();
+		auto* boxMat = mMaterials["boxMat"].get();
+		const SubmeshGeometry& boxSub = boxGeo->DrawArgs.at("box");
+
+		for (int i = 0; i < kNumScatteredObjects; ++i)
+		{
+			float x = distXZ(rng);
+			float z = distXZ(rng);
+			float s = distScale(rng);
+			float rotY = distRotY(rng);
+
+			XMMATRIX world = XMMatrixScaling(s, s, s)
+				* XMMatrixRotationY(rotY)
+				* XMMatrixTranslation(x, s * 0.5f, z);
+
+			auto item = std::make_unique<RenderItem>();
+			item->ObjCBIndex = (UINT)mAllRitems.size();
+			item->NumFramesDirty = gNumFrameResources;
+			item->Mat = boxMat;
+			item->Geo = boxGeo;
+			item->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+			item->IndexCount = boxSub.IndexCount;
+			item->StartIndexLocation = boxSub.StartIndexLocation;
+			item->BaseVertexLocation = boxSub.BaseVertexLocation;
+			XMStoreFloat4x4(&item->World, world);
+
+			localBoxBounds.Transform(item->WorldBounds, world);
+
+			mAllRitems.push_back(std::move(item));
+		}
+	}
+
+	for (auto& e : mAllRitems)
+		mOpaqueRitems.push_back(e.get());
+}
+
+void CrateApp::BuildOctree()
+{
+	std::vector<BoundingBox> bounds;
+	bounds.reserve(mOpaqueRitems.size());
+	for (const auto* ri : mOpaqueRitems)
+		bounds.push_back(ri->WorldBounds);
+
+	mOctree.Build(bounds, 7, 8);
+}
+
+BoundingBox CrateApp::ComputeWorldBounds(
+	const std::vector<Vertex>& vertices,
+	const std::vector<std::uint32_t>& indices,
+	UINT startIndex, UINT indexCount, INT baseVertex,
+	CXMMATRIX world)
+{
+	XMVECTOR mn = XMVectorReplicate(+FLT_MAX);
+	XMVECTOR mx = XMVectorReplicate(-FLT_MAX);
+
+	for (UINT k = startIndex; k < startIndex + indexCount; ++k)
+	{
+		const UINT vi = (UINT)((INT)indices[k] + baseVertex);
+		if (vi >= (UINT)vertices.size()) continue;
+		XMVECTOR p = XMVector3Transform(XMLoadFloat3(&vertices[vi].Pos), world);
+		mn = XMVectorMin(mn, p);
+		mx = XMVectorMax(mx, p);
+	}
+
+	BoundingBox result;
+	XMStoreFloat3(&result.Center,
+		XMVectorScale(XMVectorAdd(mn, mx), 0.5f));
+	XMStoreFloat3(&result.Extents,
+		XMVectorMax(XMVectorScale(XMVectorSubtract(mx, mn), 0.5f),
+			XMVectorReplicate(0.01f)));
+	return result;
 }
 
 void CrateApp::CreateSolidTexture(const std::string& name, int heapIndex,
@@ -483,10 +788,8 @@ void CrateApp::CreateSolidTexture(const std::string& name, int heapIndex,
 
 	D3D12_RESOURCE_DESC td = {};
 	td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-	td.Width = 1;
-	td.Height = 1;
-	td.DepthOrArraySize = 1;
-	td.MipLevels = 1;
+	td.Width = 1; td.Height = 1;
+	td.DepthOrArraySize = 1; td.MipLevels = 1;
 	td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	td.SampleDesc.Count = 1;
 	td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -620,73 +923,40 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 		mat->MatTransform = MathHelper::Identity4x4();
 		mat->NumFramesDirty = gNumFrameResources;
 
-		if (!mtl.DiffuseMapPath.empty())
-		{
-			std::string texName = "tex_diff_" + mtl.Name;
-			auto it = mMaterialTextureSlot.find(texName);
-			if (it == mMaterialTextureSlot.end())
+		auto loadTex = [&](const std::string& rawPath,
+			const std::string& prefix,
+			int& outSlot)
 			{
-				LoadTextureFromFile(resolveTexPath(mtl.DiffuseMapPath), texName, nextHeapSlot);
-				mat->DiffuseSrvHeapIndex = nextHeapSlot;
-				mMaterialTextureSlot[texName] = nextHeapSlot;
-				++nextHeapSlot;
-			}
-			else
-			{
-				mat->DiffuseSrvHeapIndex = it->second;
-			}
-		}
-		else
-		{
-			mat->DiffuseSrvHeapIndex = 0;
-		}
+				if (rawPath.empty()) return;
+				std::string texName = prefix + mtl.Name;
+				auto it = mMaterialTextureSlot.find(texName);
+				if (it == mMaterialTextureSlot.end())
+				{
+					LoadTextureFromFile(resolveTexPath(rawPath), texName, nextHeapSlot);
+					outSlot = nextHeapSlot;
+					mMaterialTextureSlot[texName] = nextHeapSlot;
+					++nextHeapSlot;
+				}
+				else { outSlot = it->second; }
+			};
 
-		if (!mtl.NormalMapPath.empty())
-		{
-			std::string texName = "tex_norm_" + mtl.Name;
-			auto it = mMaterialTextureSlot.find(texName);
-			if (it == mMaterialTextureSlot.end())
-			{
-				LoadTextureFromFile(resolveTexPath(mtl.NormalMapPath), texName, nextHeapSlot);
-				mat->NormalSrvHeapIndex = nextHeapSlot;
-				mMaterialTextureSlot[texName] = nextHeapSlot;
-				++nextHeapSlot;
-			}
-			else
-			{
-				mat->NormalSrvHeapIndex = it->second;
-			}
-		}
-		else
-		{
-			mat->NormalSrvHeapIndex = kDefaultNormalSlot;
-		}
+		mat->DiffuseSrvHeapIndex = 0;
+		mat->NormalSrvHeapIndex = kDefaultNormalSlot;
+		mat->DispSrvHeapIndex = kDefaultDispSlot;
+		mat->DispScale = 0.0f;
 
+		loadTex(mtl.DiffuseMapPath, "tex_diff_", mat->DiffuseSrvHeapIndex);
+		loadTex(mtl.NormalMapPath, "tex_norm_", mat->NormalSrvHeapIndex);
 		if (!mtl.DisplaceMapPath.empty())
 		{
-			std::string texName = "tex_disp_" + mtl.Name;
-			auto it = mMaterialTextureSlot.find(texName);
+			loadTex(mtl.DisplaceMapPath, "tex_disp_", mat->DispSrvHeapIndex);
 			mat->DispScale = 0.15f;
-			if (it == mMaterialTextureSlot.end())
-			{
-				LoadTextureFromFile(resolveTexPath(mtl.DisplaceMapPath), texName, nextHeapSlot);
-				mat->DispSrvHeapIndex = nextHeapSlot;
-				mMaterialTextureSlot[texName] = nextHeapSlot;
-				++nextHeapSlot;
-			}
-			else
-			{
-				mat->DispSrvHeapIndex = it->second;
-			}
-		}
-		else
-		{
-			mat->DispSrvHeapIndex = kDefaultDispSlot;
-			mat->DispScale = 0.0f;
 		}
 
 		mMaterials[mat->Name] = std::move(mat);
 	}
+
+	const XMMATRIX world = XMMatrixScaling(0.02f, 0.02f, 0.02f);
 
 	for (const auto& drawArg : mesh.DrawArgs)
 	{
@@ -701,19 +971,21 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 			auto mIt = mMaterials.find(matIt->second);
 			item->Mat = (mIt != mMaterials.end()) ? mIt->second.get() : mMaterials["woodCrate"].get();
 		}
-		else
-		{
-			item->Mat = mMaterials["woodCrate"].get();
-		}
+		else { item->Mat = mMaterials["woodCrate"].get(); }
 
 		item->Geo = mGeometries[modelName].get();
 		item->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
 		item->IndexCount = drawArg.second.IndexCount;
 		item->StartIndexLocation = drawArg.second.StartIndexLocation;
 		item->BaseVertexLocation = drawArg.second.BaseVertexLocation;
-
-		XMMATRIX world = XMMatrixScaling(0.02f, 0.02f, 0.02f);
 		XMStoreFloat4x4(&item->World, world);
+
+		item->WorldBounds = ComputeWorldBounds(
+			vertices, mesh.Indices,
+			drawArg.second.StartIndexLocation, drawArg.second.IndexCount,
+			drawArg.second.BaseVertexLocation,
+			world);
+
 		mAllRitems.push_back(std::move(item));
 	}
 }
@@ -777,15 +1049,34 @@ void CrateApp::OnKeyboardInput(const GameTimer& gt)
 
 	if (GetAsyncKeyState('W') & 0x8000) { mCameraPos.x += forward.x * speed; mCameraPos.y += forward.y * speed; mCameraPos.z += forward.z * speed; }
 	if (GetAsyncKeyState('S') & 0x8000) { mCameraPos.x -= forward.x * speed; mCameraPos.y -= forward.y * speed; mCameraPos.z -= forward.z * speed; }
-	if (GetAsyncKeyState('A') & 0x8000) { mCameraPos.x += right.x * speed; mCameraPos.z += right.z * speed; }
-	if (GetAsyncKeyState('D') & 0x8000) { mCameraPos.x -= right.x * speed; mCameraPos.z -= right.z * speed; }
+	if (GetAsyncKeyState('A') & 0x8000) { mCameraPos.x += right.x * speed;   mCameraPos.z += right.z * speed; }
+	if (GetAsyncKeyState('D') & 0x8000) { mCameraPos.x -= right.x * speed;   mCameraPos.z -= right.z * speed; }
 	if (GetAsyncKeyState('Q') & 0x8000) mCameraPos.y -= speed;
 	if (GetAsyncKeyState('E') & 0x8000) mCameraPos.y += speed;
 
 	bool isZDown = (GetAsyncKeyState('Z') & 0x8000) != 0;
-	if (isZDown && !mWasZDown)
-		mRenderingSystem.ToggleWireframe();
+	if (isZDown && !mWasZDown) mRenderingSystem.ToggleWireframe();
 	mWasZDown = isZDown;
+
+	bool isNDown = (GetAsyncKeyState('N') & 0x8000) != 0;
+	if (isNDown && !mWasNDown)
+	{
+		mFrustumCullingEnabled = !mFrustumCullingEnabled;
+		OutputDebugStringA(mFrustumCullingEnabled
+			? "[Culling] Simple frustum culling: ON\n"
+			: "[Culling] Simple frustum culling: OFF\n");
+	}
+	mWasNDown = isNDown;
+
+	bool isMDown = (GetAsyncKeyState('M') & 0x8000) != 0;
+	if (isMDown && !mWasMDown)
+	{
+		mOctreeCullingEnabled = !mOctreeCullingEnabled;
+		OutputDebugStringA(mOctreeCullingEnabled
+			? "[Culling] Octree frustum culling: ON\n"
+			: "[Culling] Octree frustum culling: OFF\n");
+	}
+	mWasMDown = isMDown;
 }
 
 void CrateApp::UpdateCamera(const GameTimer& gt)
@@ -834,9 +1125,7 @@ void CrateApp::UpdateMaterialCBs(const GameTimer& gt)
 			mc.FresnelR0 = mat->FresnelR0;
 			mc.Roughness = mat->Roughness;
 			XMStoreFloat4x4(&mc.MatTransform, XMMatrixTranspose(XMLoadFloat4x4(&mat->MatTransform)));
-
 			mc.DispScale = mat->DispScale;
-
 			currMatCB->CopyData(mat->MatCBIndex, mc);
 			mat->NumFramesDirty--;
 		}
@@ -845,8 +1134,7 @@ void CrateApp::UpdateMaterialCBs(const GameTimer& gt)
 
 void CrateApp::CreateChessboardTexture()
 {
-	const int texSize = 64;
-	const int sqSize = 8;
+	const int texSize = 64, sqSize = 8;
 	std::vector<uint8_t> pixels(texSize * texSize * 4);
 	for (int i = 0; i < texSize; ++i)
 		for (int j = 0; j < texSize; ++j)
@@ -942,7 +1230,7 @@ void CrateApp::LoadTextureFromFile(const std::string& path,
 
 	D3D12_RESOURCE_DESC td = {};
 	td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-	td.Width = width; td.Height = height;
+	td.Width = width;  td.Height = height;
 	td.DepthOrArraySize = 1; td.MipLevels = 1;
 	td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	td.SampleDesc.Count = 1; td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -981,97 +1269,11 @@ void CrateApp::LoadTextureFromFile(const std::string& path,
 	mTextures[texName] = std::move(tex);
 }
 
-void CrateApp::BuildShapeGeometry()
-{
-	GeometryGenerator geoGen;
-	auto chessboard = geoGen.CreateChessboard(5.0f, 5.0f, 8, 0.0f);
-
-	SubmeshGeometry sub;
-	sub.IndexCount = (UINT)chessboard.Indices32.size();
-	sub.StartIndexLocation = 0;
-	sub.BaseVertexLocation = 0;
-
-	std::vector<Vertex> verts(chessboard.Vertices.size());
-	for (size_t i = 0; i < verts.size(); ++i)
-	{
-		verts[i].Pos = chessboard.Vertices[i].Position;
-		verts[i].Normal = chessboard.Vertices[i].Normal;
-		verts[i].TexC = chessboard.Vertices[i].TexC;
-		verts[i].Color = chessboard.Vertices[i].Color;
-	}
-	auto& inds = chessboard.Indices32;
-
-	const UINT vbBytes = (UINT)verts.size() * sizeof(Vertex);
-	const UINT ibBytes = (UINT)inds.size() * sizeof(std::uint32_t);
-
-	auto geo = std::make_unique<MeshGeometry>();
-	geo->Name = "chessboardGeo";
-	ThrowIfFailed(D3DCreateBlob(vbBytes, &geo->VertexBufferCPU));
-	CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), verts.data(), vbBytes);
-	ThrowIfFailed(D3DCreateBlob(ibBytes, &geo->IndexBufferCPU));
-	CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), inds.data(), ibBytes);
-	geo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
-		mCommandList.Get(), verts.data(), vbBytes, geo->VertexBufferUploader);
-	geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
-		mCommandList.Get(), inds.data(), ibBytes, geo->IndexBufferUploader);
-	geo->VertexByteStride = sizeof(Vertex);
-	geo->VertexBufferByteSize = vbBytes;
-	geo->IndexFormat = DXGI_FORMAT_R32_UINT;
-	geo->IndexBufferByteSize = ibBytes;
-	geo->DrawArgs["chessboard"] = sub;
-	mGeometries[geo->Name] = std::move(geo);
-}
-
 void CrateApp::BuildFrameResources()
 {
 	for (int i = 0; i < gNumFrameResources; ++i)
 		mFrameResources.push_back(std::make_unique<FrameResource>(
 			md3dDevice.Get(), 1, (UINT)mAllRitems.size(), (UINT)mMaterials.size()));
-}
-
-void CrateApp::BuildMaterials()
-{
-	auto woodCrate = std::make_unique<Material>();
-	woodCrate->Name = "woodCrate";
-	woodCrate->MatCBIndex = 0;
-	woodCrate->DiffuseSrvHeapIndex = 0;
-	woodCrate->NormalSrvHeapIndex = kDefaultNormalSlot;
-	woodCrate->DispSrvHeapIndex = kDefaultDispSlot;
-	woodCrate->DiffuseAlbedo = XMFLOAT4(1, 1, 1, 1);
-	woodCrate->FresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
-	woodCrate->Roughness = 0.2f;
-	woodCrate->DispScale = 0.0f;
-	mMaterials["woodCrate"] = std::move(woodCrate);
-
-	auto chess = std::make_unique<Material>();
-	chess->Name = "chessboard";
-	chess->MatCBIndex = 1;
-	chess->DiffuseSrvHeapIndex = 1;
-	chess->NormalSrvHeapIndex = kDefaultNormalSlot;
-	chess->DispSrvHeapIndex = kDefaultDispSlot;
-	chess->DiffuseAlbedo = XMFLOAT4(1, 1, 1, 1);
-	chess->FresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
-	chess->Roughness = 0.5f;
-	chess->DispScale = 0.0f;
-	mMaterials["chessboard"] = std::move(chess);
-}
-
-void CrateApp::BuildRenderItems()
-{
-	auto chesItem = std::make_unique<RenderItem>();
-	chesItem->ObjCBIndex = (UINT)mAllRitems.size();
-	chesItem->NumFramesDirty = gNumFrameResources;
-	chesItem->Mat = mMaterials["chessboard"].get();
-	chesItem->Geo = mGeometries["chessboardGeo"].get();
-	chesItem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
-	chesItem->IndexCount = chesItem->Geo->DrawArgs["chessboard"].IndexCount;
-	chesItem->StartIndexLocation = chesItem->Geo->DrawArgs["chessboard"].StartIndexLocation;
-	chesItem->BaseVertexLocation = chesItem->Geo->DrawArgs["chessboard"].BaseVertexLocation;
-	XMStoreFloat4x4(&chesItem->World, XMMatrixTranslation(0.0f, 3.0f, 0.0f));
-	mAllRitems.push_back(std::move(chesItem));
-
-	for (auto& e : mAllRitems)
-		mOpaqueRitems.push_back(e.get());
 }
 
 void CrateApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList,
@@ -1090,10 +1292,10 @@ void CrateApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList,
 		cmdList->IASetIndexBuffer(&ibv);
 		cmdList->IASetPrimitiveTopology(ri->PrimitiveType);
 
-		D3D12_GPU_VIRTUAL_ADDRESS objAddr = objectCB->GetGPUVirtualAddress()
-			+ ri->ObjCBIndex * objCBBytes;
-		D3D12_GPU_VIRTUAL_ADDRESS matAddr = matCB->GetGPUVirtualAddress()
-			+ ri->Mat->MatCBIndex * matCBBytes;
+		D3D12_GPU_VIRTUAL_ADDRESS objAddr =
+			objectCB->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBBytes;
+		D3D12_GPU_VIRTUAL_ADDRESS matAddr =
+			matCB->GetGPUVirtualAddress() + ri->Mat->MatCBIndex * matCBBytes;
 
 		CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseTex(
 			mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());

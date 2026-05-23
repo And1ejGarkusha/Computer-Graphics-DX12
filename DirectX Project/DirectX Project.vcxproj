@@ -148,6 +148,7 @@
     <ClInclude Include="GeometryGenerator.h" />
     <ClInclude Include="MathHelper.h" />
     <ClInclude Include="OBJLoader.h" />
+    <ClInclude Include="Octree.h" />
     <ClInclude Include="RenderingSystem.h" />
     <ClInclude Include="UploadBuffer.h" />
   </ItemGroup>

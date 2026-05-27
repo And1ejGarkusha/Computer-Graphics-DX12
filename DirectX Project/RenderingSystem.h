@@ -38,18 +38,20 @@ public:
         const D3D12_VIEWPORT& viewport,
         const D3D12_RECT& scissor);
 
-    void DrawLightingPass(ID3D12GraphicsCommandList* cmdList,
+    void DrawLightingPass(
+        ID3D12GraphicsCommandList* cmdList,
         ID3D12DescriptorHeap* srvHeap,
-        D3D12_GPU_VIRTUAL_ADDRESS  passCBAddress);
+        D3D12_GPU_VIRTUAL_ADDRESS   passCBAddress,
+        D3D12_GPU_DESCRIPTOR_HANDLE depthSRV,
+        D3D12_GPU_DESCRIPTOR_HANDLE shadowSRV);
 
     void ToggleWireframe() { mWireframeMode = !mWireframeMode; }
     bool IsWireframe()     const { return mWireframeMode; }
 
-    ID3D12RootSignature* GetLightingRootSig()   const { return mLightingRootSig.Get(); }
-
-    ID3D12PipelineState* GetGeometryPSO()       const { return mGeometryPSO.Get(); }
-    ID3D12PipelineState* GetLightingPSO()       const { return mLightingPSO.Get(); }
-    const GBuffer& GetGBuffer()           const { return mGBuffer; }
+    ID3D12RootSignature* GetLightingRootSig() const { return mLightingRootSig.Get(); }
+    ID3D12PipelineState* GetGeometryPSO()     const { return mGeometryPSO.Get(); }
+    ID3D12PipelineState* GetLightingPSO()     const { return mLightingPSO.Get(); }
+    const GBuffer& GetGBuffer()         const { return mGBuffer; }
 
 private:
     void BuildRtvHeap(ID3D12Device* device);
@@ -62,7 +64,6 @@ private:
     GBuffer  mGBuffer;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mGBufferRtvHeap;
-
     Microsoft::WRL::ComPtr<ID3D12RootSignature>  mLightingRootSig;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>  mGeometryPSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>  mGeometryWireframePSO;

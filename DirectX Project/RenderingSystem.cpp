@@ -52,8 +52,7 @@ void RenderingSystem::BeginGeometryPass(
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[GBuffer::NumRTs] = {
         mGBuffer.GetAlbedoRTV(),
-        mGBuffer.GetNormalRTV(),
-        mGBuffer.GetPositionRTV()
+        mGBuffer.GetNormalRTV()
     };
 
     cmdList->RSSetViewports(1, &viewport);
@@ -91,14 +90,20 @@ void RenderingSystem::BeginLightingPass(
 void RenderingSystem::DrawLightingPass(
     ID3D12GraphicsCommandList* cmdList,
     ID3D12DescriptorHeap* srvHeap,
-    D3D12_GPU_VIRTUAL_ADDRESS  passCBAddress)
+    D3D12_GPU_VIRTUAL_ADDRESS   passCBAddress,
+    D3D12_GPU_DESCRIPTOR_HANDLE depthSRV,
+    D3D12_GPU_DESCRIPTOR_HANDLE shadowSRV)
 {
     ID3D12DescriptorHeap* heaps[] = { srvHeap };
     cmdList->SetDescriptorHeaps(1, heaps);
 
     cmdList->SetGraphicsRootDescriptorTable(0, mGBuffer.GetSRVGPUHandle());
-
+    
     cmdList->SetGraphicsRootConstantBufferView(1, passCBAddress);
+    
+    cmdList->SetGraphicsRootDescriptorTable(2, depthSRV);
+    
+    cmdList->SetGraphicsRootDescriptorTable(3, shadowSRV);
 
     cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmdList->IASetVertexBuffers(0, 0, nullptr);
@@ -112,19 +117,27 @@ void RenderingSystem::BuildRtvHeap(ID3D12Device* device)
     desc.NumDescriptors = GBuffer::NumRTs;
     desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device->CreateDescriptorHeap(&desc,
-        IID_PPV_ARGS(mGBufferRtvHeap.GetAddressOf())));
+    ThrowIfFailed(device->CreateDescriptorHeap(
+        &desc, IID_PPV_ARGS(mGBufferRtvHeap.GetAddressOf())));
     mGBufferRtvHeap->SetName(L"GBuffer RTV Heap");
 }
 
 void RenderingSystem::BuildLightingRootSignature(ID3D12Device* device)
 {
     CD3DX12_DESCRIPTOR_RANGE gbufferTable;
-    gbufferTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 1);
+    gbufferTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 1);
 
-    CD3DX12_ROOT_PARAMETER params[2];
+    CD3DX12_DESCRIPTOR_RANGE depthTable;
+    depthTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3);
+
+    CD3DX12_DESCRIPTOR_RANGE shadowTable;
+    shadowTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 4);
+
+    CD3DX12_ROOT_PARAMETER params[4];
     params[0].InitAsDescriptorTable(1, &gbufferTable, D3D12_SHADER_VISIBILITY_PIXEL);
     params[1].InitAsConstantBufferView(0);
+    params[2].InitAsDescriptorTable(1, &depthTable, D3D12_SHADER_VISIBILITY_PIXEL);
+    params[3].InitAsDescriptorTable(1, &shadowTable, D3D12_SHADER_VISIBILITY_PIXEL);
 
     CD3DX12_STATIC_SAMPLER_DESC linearClamp(
         0,
@@ -133,15 +146,28 @@ void RenderingSystem::BuildLightingRootSignature(ID3D12Device* device)
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
 
+    CD3DX12_STATIC_SAMPLER_DESC shadowSampler(
+        1,
+        D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+        0.0f,
+        0,
+        D3D12_COMPARISON_FUNC_LESS_EQUAL,
+        D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE);
+
+    CD3DX12_STATIC_SAMPLER_DESC samplers[2] = { linearClamp, shadowSampler };
+
     CD3DX12_ROOT_SIGNATURE_DESC sigDesc(
-        _countof(params), params, 1, &linearClamp,
+        _countof(params), params,
+        _countof(samplers), samplers,
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     Microsoft::WRL::ComPtr<ID3DBlob> serialized, error;
     HRESULT hr = D3D12SerializeRootSignature(
         &sigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
         serialized.GetAddressOf(), error.GetAddressOf());
-
     if (error)
         OutputDebugStringA((char*)error->GetBufferPointer());
     ThrowIfFailed(hr);
@@ -156,8 +182,8 @@ void RenderingSystem::BuildLightingRootSignature(ID3D12Device* device)
 
 void RenderingSystem::BuildPSOs(
     ID3D12Device* device,
-    DXGI_FORMAT            backBufferFormat,
-    DXGI_FORMAT            depthStencilFormat,
+    DXGI_FORMAT          backBufferFormat,
+    DXGI_FORMAT          depthStencilFormat,
     ID3D12RootSignature* geometryRootSig)
 {
     mGeometryInputLayout =
@@ -173,7 +199,6 @@ void RenderingSystem::BuildPSOs(
     auto hsGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "HS", "hs_5_0");
     auto dsGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "DS", "ds_5_0");
     auto psGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "PS", "ps_5_0");
-
     auto vsLit = d3dUtil::CompileShader(L"Shaders\\DeferredLighting.hlsl", nullptr, "VS", "vs_5_0");
     auto psLit = d3dUtil::CompileShader(L"Shaders\\DeferredLighting.hlsl", nullptr, "PS", "ps_5_0");
 
@@ -181,27 +206,20 @@ void RenderingSystem::BuildPSOs(
         D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
         desc.InputLayout = { mGeometryInputLayout.data(), (UINT)mGeometryInputLayout.size() };
         desc.pRootSignature = geometryRootSig;
-
         desc.VS = { reinterpret_cast<BYTE*>(vsGeo->GetBufferPointer()), vsGeo->GetBufferSize() };
         desc.HS = { reinterpret_cast<BYTE*>(hsGeo->GetBufferPointer()), hsGeo->GetBufferSize() };
         desc.DS = { reinterpret_cast<BYTE*>(dsGeo->GetBufferPointer()), dsGeo->GetBufferSize() };
         desc.PS = { reinterpret_cast<BYTE*>(psGeo->GetBufferPointer()), psGeo->GetBufferSize() };
-
         desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
         desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
         desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
         desc.SampleMask = UINT_MAX;
-
         desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
-
         desc.NumRenderTargets = GBuffer::NumRTs;
         desc.RTVFormats[0] = GBuffer::AlbedoFormat;
         desc.RTVFormats[1] = GBuffer::NormalFormat;
-        desc.RTVFormats[2] = GBuffer::PositionFormat;
         desc.SampleDesc.Count = 1;
-        desc.SampleDesc.Quality = 0;
         desc.DSVFormat = depthStencilFormat;
-
         ThrowIfFailed(device->CreateGraphicsPipelineState(
             &desc, IID_PPV_ARGS(mGeometryPSO.GetAddressOf())));
         mGeometryPSO->SetName(L"Geometry Pass PSO (tessellated)");
@@ -236,9 +254,7 @@ void RenderingSystem::BuildPSOs(
         desc.NumRenderTargets = 1;
         desc.RTVFormats[0] = backBufferFormat;
         desc.SampleDesc.Count = 1;
-        desc.SampleDesc.Quality = 0;
         desc.DSVFormat = depthStencilFormat;
-
         ThrowIfFailed(device->CreateGraphicsPipelineState(
             &desc, IID_PPV_ARGS(mLightingPSO.GetAddressOf())));
         mLightingPSO->SetName(L"Lighting Pass PSO");

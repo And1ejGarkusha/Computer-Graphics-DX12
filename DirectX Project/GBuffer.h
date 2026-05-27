@@ -5,10 +5,9 @@
 class GBuffer
 {
 public:
-    static const int        NumRTs = 3;
+    static const int         NumRTs = 2;
     static const DXGI_FORMAT AlbedoFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static const DXGI_FORMAT NormalFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    static const DXGI_FORMAT PositionFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
 
     void Create(ID3D12Device* device,
         UINT                   width,
@@ -40,7 +39,6 @@ public:
     {
         mAlbedoBuffer.Reset();
         mNormalBuffer.Reset();
-        mPositionBuffer.Reset();
         Create(device, width, height, rtvHeap, rtvBaseOffset,
             srvHeap, srvBaseOffset, rtvDescSize, srvDescSize);
     }
@@ -51,8 +49,6 @@ public:
             CD3DX12_RESOURCE_BARRIER::Transition(mAlbedoBuffer.Get(),
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
             CD3DX12_RESOURCE_BARRIER::Transition(mNormalBuffer.Get(),
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
-            CD3DX12_RESOURCE_BARRIER::Transition(mPositionBuffer.Get(),
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)
         };
         cmdList->ResourceBarrier(NumRTs, barriers);
@@ -64,8 +60,6 @@ public:
             CD3DX12_RESOURCE_BARRIER::Transition(mAlbedoBuffer.Get(),
                 D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
             CD3DX12_RESOURCE_BARRIER::Transition(mNormalBuffer.Get(),
-                D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-            CD3DX12_RESOURCE_BARRIER::Transition(mPositionBuffer.Get(),
                 D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
         };
         cmdList->ResourceBarrier(NumRTs, barriers);
@@ -76,12 +70,10 @@ public:
         float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
         cmdList->ClearRenderTargetView(mAlbedoRTV, clearColor, 0, nullptr);
         cmdList->ClearRenderTargetView(mNormalRTV, clearColor, 0, nullptr);
-        cmdList->ClearRenderTargetView(mPositionRTV, clearColor, 0, nullptr);
     }
 
     CD3DX12_CPU_DESCRIPTOR_HANDLE GetAlbedoRTV()   const { return mAlbedoRTV; }
     CD3DX12_CPU_DESCRIPTOR_HANDLE GetNormalRTV()   const { return mNormalRTV; }
-    CD3DX12_CPU_DESCRIPTOR_HANDLE GetPositionRTV() const { return mPositionRTV; }
 
     CD3DX12_GPU_DESCRIPTOR_HANDLE GetSRVGPUHandle() const { return mSRVGPUHandle; }
 
@@ -118,7 +110,6 @@ private:
 
         CreateRT(AlbedoFormat, mAlbedoBuffer);
         CreateRT(NormalFormat, mNormalBuffer);
-        CreateRT(PositionFormat, mPositionBuffer);
     }
 
     void CreateViews(ID3D12Device* device,
@@ -134,7 +125,6 @@ private:
 
         mAlbedoRTV = CD3DX12_CPU_DESCRIPTOR_HANDLE(rtvStart, rtvBase + 0, rtvDescSize);
         mNormalRTV = CD3DX12_CPU_DESCRIPTOR_HANDLE(rtvStart, rtvBase + 1, rtvDescSize);
-        mPositionRTV = CD3DX12_CPU_DESCRIPTOR_HANDLE(rtvStart, rtvBase + 2, rtvDescSize);
 
         auto MakeRTV = [&](ID3D12Resource* res, DXGI_FORMAT fmt,
             CD3DX12_CPU_DESCRIPTOR_HANDLE handle)
@@ -147,7 +137,6 @@ private:
 
         MakeRTV(mAlbedoBuffer.Get(), AlbedoFormat, mAlbedoRTV);
         MakeRTV(mNormalBuffer.Get(), NormalFormat, mNormalRTV);
-        MakeRTV(mPositionBuffer.Get(), PositionFormat, mPositionRTV);
 
         auto srvCpuStart = CD3DX12_CPU_DESCRIPTOR_HANDLE(
             srvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -168,16 +157,13 @@ private:
 
         MakeSRV(mAlbedoBuffer.Get(), AlbedoFormat, 0);
         MakeSRV(mNormalBuffer.Get(), NormalFormat, 1);
-        MakeSRV(mPositionBuffer.Get(), PositionFormat, 2);
     }
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mAlbedoBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> mNormalBuffer;
-    Microsoft::WRL::ComPtr<ID3D12Resource> mPositionBuffer;
 
     CD3DX12_CPU_DESCRIPTOR_HANDLE mAlbedoRTV;
     CD3DX12_CPU_DESCRIPTOR_HANDLE mNormalRTV;
-    CD3DX12_CPU_DESCRIPTOR_HANDLE mPositionRTV;
     CD3DX12_GPU_DESCRIPTOR_HANDLE mSRVGPUHandle;
 
     UINT mWidth = 0;

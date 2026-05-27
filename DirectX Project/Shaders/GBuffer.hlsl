@@ -77,7 +77,6 @@ struct PatchTess
 struct DomainOut
 {
     float4 PosH : SV_POSITION;
-    float3 PosW : POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD0;
     float3 TangentW : TEXCOORD1;
@@ -87,7 +86,6 @@ struct GBufferOut
 {
     float4 Albedo : SV_Target0;
     float4 Normal : SV_Target1;
-    float4 Position : SV_Target2;
 };
 
 VertexOut VS(VertexIn vin)
@@ -193,7 +191,6 @@ DomainOut DS(PatchTess patchTess,
     float3 normW = normalize(mul(normL, (float3x3) gWorld));
     tanW = normalize(tanW);
 
-    dout.PosW = posW.xyz;
     dout.NormalW = normW;
     dout.TangentW = tanW;
     dout.TexC = texC;
@@ -219,6 +216,5 @@ GBufferOut PS(DomainOut pin)
     GBufferOut gout;
     gout.Albedo = float4(diffuse.rgb, gRoughness);
     gout.Normal = float4(normalW, gFresnelR0.x);
-    gout.Position = float4(pin.PosW, 1.0f);
     return gout;
 }

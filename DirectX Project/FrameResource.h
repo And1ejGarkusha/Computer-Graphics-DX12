@@ -42,6 +42,13 @@ struct PassConstants
 
     DirectX::XMFLOAT4X4 LightViewProj[NUM_CASCADES];
     DirectX::XMFLOAT4   CascadeSplits = { 0.f, 0.f, 0.f, 0.f };
+
+    float               Gamma = 2.2f;
+    float               GammaPad[3] = {};
+
+    int                 EdgeDetection = 0;
+    int                 VCRFilter = 0;
+    int                 PostFXPad[2] = {};
 };
 
 struct Vertex

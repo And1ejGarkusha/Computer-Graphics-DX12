@@ -6,7 +6,7 @@ class GBuffer
 {
 public:
     static const int         NumRTs = 2;
-    static const DXGI_FORMAT AlbedoFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    static const DXGI_FORMAT AlbedoFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     static const DXGI_FORMAT NormalFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
     void Create(ID3D12Device* device,

@@ -11,6 +11,8 @@
 #include "Octree.h"
 #include <fstream>
 #include <random>
+#include <commctrl.h>
+#pragma comment(lib, "comctl32.lib")
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -72,6 +74,8 @@ public:
 
 	virtual bool Initialize() override;
 
+	void SetGamma(float gamma) { mGamma = gamma; }
+
 private:
 	virtual void OnResize()                          override;
 	virtual void Update(const GameTimer& gt)         override;
@@ -112,7 +116,8 @@ private:
 
 	void LoadOBJModel(const std::string& filename, const std::string& modelName);
 	void LoadTextureFromFile(const std::string& path,
-		const std::string& texName, int heapIndex);
+		const std::string& texName, int heapIndex,
+		bool isSRGB = false);
 
 	void CreateSolidTexture(const std::string& name, int heapIndex,
 		uint8_t r, uint8_t g, uint8_t b, uint8_t a);
@@ -185,7 +190,181 @@ private:
 	POINT mCenterScreen;
 
 	bool mWasZDown = false;
+
+	float mGamma = 2.2f;
+	bool  mEdgeDetection = false;
+	bool  mVCRFilter = false;
+	bool  mWas1Down = false;
+	bool  mWas2Down = false;
 };
+
+static float  s_GammaResult = 2.2f;
+static HWND   s_SliderHwnd = nullptr;
+static HWND   s_PreviewHwnd = nullptr;
+static HWND   s_LabelHwnd = nullptr;
+
+static void GammaDrawPreview(HWND hPreview, HDC hdc)
+{
+	RECT rc;
+	GetClientRect(hPreview, &rc);
+	int W = rc.right;
+	int H = rc.bottom;
+
+	BITMAPINFO bmi = {};
+	bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bmi.bmiHeader.biWidth = W;
+	bmi.bmiHeader.biHeight = -H;
+	bmi.bmiHeader.biPlanes = 1;
+	bmi.bmiHeader.biBitCount = 32;
+	bmi.bmiHeader.biCompression = BI_RGB;
+
+	void* pBits = nullptr;
+	HDC     memDC = CreateCompatibleDC(hdc);
+	HBITMAP bmp = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
+	HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, bmp);
+
+	DWORD* pixels = (DWORD*)pBits;
+	for (int x = 0; x < W; ++x)
+	{
+		float t = (float)x / (float)(W - 1);
+		float c = powf(t, 1.0f / s_GammaResult);
+		BYTE  gc = (BYTE)(c * 255.0f + 0.5f);
+		DWORD col = RGB(gc, gc, gc);
+
+		for (int y = 0; y < H; ++y)
+			pixels[y * W + x] = col;
+	}
+
+	BitBlt(hdc, 0, 0, W, H, memDC, 0, 0, SRCCOPY);
+	SelectObject(memDC, oldBmp);
+	DeleteObject(bmp);
+	DeleteDC(memDC);
+
+	SetBkMode(hdc, TRANSPARENT);
+	SetTextColor(hdc, RGB(255, 255, 0));
+	RECT rLabel = { 4, 2, W, H - 2 };
+	DrawText(hdc, L"Gamma-corrected output", -1, &rLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
+LRESULT CALLBACK GammaWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	switch (msg)
+	{
+	case WM_CREATE:
+	{
+		INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_BAR_CLASSES };
+		InitCommonControlsEx(&icex);
+
+		HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE);
+
+		CreateWindowExW(0, L"STATIC",
+			L"Adjust gamma",
+			WS_CHILD | WS_VISIBLE | SS_LEFT,
+			12, 10, 576, 36, hwnd, nullptr, hInst, nullptr);
+
+		s_PreviewHwnd = CreateWindowExW(0, L"STATIC", L"",
+			WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
+			12, 54, 576, 120, hwnd, (HMENU)(UINT_PTR)1001, hInst, nullptr);
+
+		s_LabelHwnd = CreateWindowExW(0, L"STATIC", L"Gamma: 2.20",
+			WS_CHILD | WS_VISIBLE | SS_CENTER,
+			12, 184, 576, 20, hwnd, (HMENU)(UINT_PTR)1002, hInst, nullptr);
+
+		s_SliderHwnd = CreateWindowExW(0, TRACKBAR_CLASSW, L"",
+			WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_AUTOTICKS | TBS_NOTICKS,
+			12, 208, 576, 36, hwnd, (HMENU)(UINT_PTR)1003, hInst, nullptr);
+		SendMessage(s_SliderHwnd, TBM_SETRANGE, TRUE, MAKELPARAM(100, 300));
+		SendMessage(s_SliderHwnd, TBM_SETPOS, TRUE, 220);
+		SendMessage(s_SliderHwnd, TBM_SETTICFREQ, 10, 0);
+
+		CreateWindowExW(0, L"BUTTON", L"Start Game",
+			WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+			238, 258, 124, 32, hwnd, (HMENU)(UINT_PTR)IDOK, hInst, nullptr);
+
+		break;
+	}
+
+	case WM_DRAWITEM:
+	{
+		auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+		if (dis->CtlID == 1001)
+		{
+			GammaDrawPreview(dis->hwndItem, dis->hDC);
+			return TRUE;
+		}
+		break;
+	}
+
+	case WM_HSCROLL:
+	{
+		if ((HWND)lParam == s_SliderHwnd)
+		{
+			int pos = (int)SendMessage(s_SliderHwnd, TBM_GETPOS, 0, 0);
+			s_GammaResult = pos / 100.0f;
+
+			wchar_t buf[32];
+			swprintf_s(buf, L"Gamma: %.2f", s_GammaResult);
+			SetWindowTextW(s_LabelHwnd, buf);
+			InvalidateRect(s_PreviewHwnd, nullptr, FALSE);
+		}
+		break;
+	}
+
+	case WM_COMMAND:
+		if (LOWORD(wParam) == IDOK)
+			DestroyWindow(hwnd);
+		break;
+
+	case WM_DESTROY:
+		PostQuitMessage(0);
+		break;
+
+	default:
+		return DefWindowProcW(hwnd, msg, wParam, lParam);
+	}
+	return 0;
+}
+
+static float ShowGammaCalibration(HINSTANCE hInstance)
+{
+	s_GammaResult = 2.2f;
+
+	WNDCLASSEXW wc = {};
+	wc.cbSize = sizeof(wc);
+	wc.lpfnWndProc = GammaWndProc;
+	wc.hInstance = hInstance;
+	wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+	wc.lpszClassName = L"GammaCalibClass";
+	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+	RegisterClassExW(&wc);
+
+	int screenW = GetSystemMetrics(SM_CXSCREEN);
+	int screenH = GetSystemMetrics(SM_CYSCREEN);
+	int dlgW = 620, dlgH = 320;
+	int posX = (screenW - dlgW) / 2;
+	int posY = (screenH - dlgH) / 2;
+
+	HWND hwnd = CreateWindowExW(
+		WS_EX_APPWINDOW | WS_EX_DLGMODALFRAME,
+		L"GammaCalibClass",
+		L"Gamma Calibration",
+		WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+		posX, posY, dlgW, dlgH,
+		nullptr, nullptr, hInstance, nullptr);
+
+	ShowWindow(hwnd, SW_SHOW);
+	UpdateWindow(hwnd);
+
+	MSG msg = {};
+	while (GetMessageW(&msg, nullptr, 0, 0))
+	{
+		TranslateMessage(&msg);
+		DispatchMessageW(&msg);
+	}
+
+	UnregisterClassW(L"GammaCalibClass", hInstance);
+	return s_GammaResult;
+}
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
 	PSTR cmdLine, int showCmd)
@@ -195,7 +374,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
 #endif
 	try
 	{
+		float gamma = ShowGammaCalibration(hInstance);
+
 		CrateApp theApp(hInstance);
+		theApp.SetGamma(gamma);
 		if (!theApp.Initialize())
 			return 0;
 		return theApp.Run();
@@ -540,6 +722,9 @@ void CrateApp::UpdateMainPassCB(const GameTimer& gt)
 		mCurrFrameResource->ShadowPassCB->CopyData(i, spc);
 	}
 
+	mMainPassCB.Gamma = mGamma;
+	mMainPassCB.EdgeDetection = mEdgeDetection ? 1 : 0;
+	mMainPassCB.VCRFilter = mVCRFilter ? 1 : 0;
 	mCurrFrameResource->PassCB->CopyData(0, mMainPassCB);
 }
 
@@ -1010,14 +1195,15 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 		mat->NumFramesDirty = gNumFrameResources;
 
 		auto loadTex = [&](const std::string& rawPath,
-			const std::string& prefix, int& outSlot)
+			const std::string& prefix, int& outSlot,
+			bool isSRGB = false)
 			{
 				if (rawPath.empty()) return;
 				std::string texName = prefix + mtl.Name;
 				auto it = mMaterialTextureSlot.find(texName);
 				if (it == mMaterialTextureSlot.end())
 				{
-					LoadTextureFromFile(resolveTexPath(rawPath), texName, nextHeapSlot);
+					LoadTextureFromFile(resolveTexPath(rawPath), texName, nextHeapSlot, isSRGB);
 					outSlot = nextHeapSlot;
 					mMaterialTextureSlot[texName] = nextHeapSlot;
 					++nextHeapSlot;
@@ -1030,11 +1216,11 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 		mat->DispSrvHeapIndex = kDefaultDispSlot;
 		mat->DispScale = 0.0f;
 
-		loadTex(mtl.DiffuseMapPath, "tex_diff_", mat->DiffuseSrvHeapIndex);
-		loadTex(mtl.NormalMapPath, "tex_norm_", mat->NormalSrvHeapIndex);
+		loadTex(mtl.DiffuseMapPath, "tex_diff_", mat->DiffuseSrvHeapIndex, true);
+		loadTex(mtl.NormalMapPath, "tex_norm_", mat->NormalSrvHeapIndex, false);
 		if (!mtl.DisplaceMapPath.empty())
 		{
-			loadTex(mtl.DisplaceMapPath, "tex_disp_", mat->DispSrvHeapIndex);
+			loadTex(mtl.DisplaceMapPath, "tex_disp_", mat->DispSrvHeapIndex, false);
 			mat->DispScale = 0.15f;
 		}
 
@@ -1144,6 +1330,26 @@ void CrateApp::OnKeyboardInput(const GameTimer& gt)
 	bool isZDown = (GetAsyncKeyState('Z') & 0x8000) != 0;
 	if (isZDown && !mWasZDown) mRenderingSystem.ToggleWireframe();
 	mWasZDown = isZDown;
+
+	bool is1Down = (GetAsyncKeyState('1') & 0x8000) != 0;
+	if (is1Down && !mWas1Down)
+	{
+		mEdgeDetection = !mEdgeDetection;
+		OutputDebugStringA(mEdgeDetection
+			? "[PostFX] Edge Detection: ON\n"
+			: "[PostFX] Edge Detection: OFF\n");
+	}
+	mWas1Down = is1Down;
+
+	bool is2Down = (GetAsyncKeyState('2') & 0x8000) != 0;
+	if (is2Down && !mWas2Down)
+	{
+		mVCRFilter = !mVCRFilter;
+		OutputDebugStringA(mVCRFilter
+			? "[PostFX] VCR Filter: ON\n"
+			: "[PostFX] VCR Filter: OFF\n");
+	}
+	mWas2Down = is2Down;
 
 	bool isNDown = (GetAsyncKeyState('N') & 0x8000) != 0;
 	if (isNDown && !mWasNDown)
@@ -1292,7 +1498,8 @@ void CrateApp::LoadTextures()
 }
 
 void CrateApp::LoadTextureFromFile(const std::string& path,
-	const std::string& texName, int heapIndex)
+	const std::string& texName, int heapIndex,
+	bool isSRGB)
 {
 	std::wstring wpath(path.begin(), path.end());
 	std::vector<uint8_t> tgaData;
@@ -1318,11 +1525,15 @@ void CrateApp::LoadTextureFromFile(const std::string& path,
 	auto tex = std::make_unique<Texture>();
 	tex->Name = texName;
 
+	const DXGI_FORMAT texFormat = isSRGB
+		? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+		: DXGI_FORMAT_R8G8B8A8_UNORM;
+
 	D3D12_RESOURCE_DESC td = {};
 	td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	td.Width = width; td.Height = height;
 	td.DepthOrArraySize = 1; td.MipLevels = 1;
-	td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	td.Format = texFormat;
 	td.SampleDesc.Count = 1; td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
 	CD3DX12_HEAP_PROPERTIES hp(D3D12_HEAP_TYPE_DEFAULT);
@@ -1354,7 +1565,7 @@ void CrateApp::LoadTextureFromFile(const std::string& path,
 	h.Offset(heapIndex, mCbvSrvDescriptorSize);
 	D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
 	sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	sv.Format = texFormat;
 	sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	sv.Texture2D.MipLevels = 1;
 	md3dDevice->CreateShaderResourceView(tex->Resource.Get(), &sv, h);

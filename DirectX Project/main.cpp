@@ -27,6 +27,21 @@ const int NUM_DIR_LIGHTS = 1;
 const int NUM_POINT_LIGHTS = 1;
 const int NUM_SPOT_LIGHTS = 1;
 
+static const int kMaxFiredSpots = 14;
+static const float kSpotLifetime = 10.0f;
+static const float kSpotSpeed = 3.0f;
+static const float kSpotRotSpeed = 1.5f;
+
+struct FiredSpotLight
+{
+	XMFLOAT3 Position;
+	XMFLOAT3 Velocity;
+	XMFLOAT3 BaseDir;
+	float     Age;
+	float     RotAngle;
+	XMFLOAT3  Color;
+};
+
 static const UINT kRootDiffuse = 0;
 static const UINT kRootObjCB = 1;
 static const UINT kRootPassCB = 2;
@@ -206,6 +221,10 @@ private:
 	bool  mVCRFilter = false;
 	bool  mWas1Down = false;
 	bool  mWas2Down = false;
+	bool  mWasGDown = false;
+
+	std::vector<FiredSpotLight> mFiredSpots;
+	int   mNextSpotColorIdx = 0;
 };
 
 static float  s_GammaResult = 2.2f;
@@ -433,8 +452,8 @@ bool CrateApp::Initialize()
 	BuildShadersAndInputLayout();
 	BuildShapeGeometry();
 	BuildMaterials();
-	//LoadOBJModel("sponza.obj", "myModel");
-	LoadOBJModel("Cerberus_LP.obj", "1myModel");
+	LoadOBJModel("sponza.obj", "myModel");
+	//LoadOBJModel("Cerberus_LP.obj", "1myModel");
 	BuildRenderItems();
 	BuildFrameResources();
 	BuildPSOs();
@@ -522,6 +541,21 @@ void CrateApp::Update(const GameTimer& gt)
 	AnimateMaterials(gt);
 	UpdateObjectCBs(gt);
 	UpdateMaterialCBs(gt);
+
+	float dt = gt.DeltaTime();
+	for (auto& fs : mFiredSpots)
+	{
+		fs.Position.x += fs.Velocity.x * dt;
+		fs.Position.y += fs.Velocity.y * dt;
+		fs.Position.z += fs.Velocity.z * dt;
+		fs.Age += dt;
+		fs.RotAngle += dt;
+	}
+	mFiredSpots.erase(
+		std::remove_if(mFiredSpots.begin(), mFiredSpots.end(),
+			[](const FiredSpotLight& f) { return f.Age >= kSpotLifetime; }),
+		mFiredSpots.end());
+
 	UpdateMainPassCB(gt);
 }
 
@@ -736,6 +770,40 @@ void CrateApp::UpdateMainPassCB(const GameTimer& gt)
 		mMainPassCB.Lights[idx].FalloffStart = 3.0f;
 		mMainPassCB.Lights[idx].FalloffEnd = 8.0f;
 		mMainPassCB.Lights[idx].SpotPower = 320.0f;
+	}
+
+	{
+		int baseIdx = NUM_DIR_LIGHTS + NUM_POINT_LIGHTS + 1;
+		int count = (int)mFiredSpots.size();
+		for (int i = 0; i < count && i < kMaxFiredSpots - 1; ++i)
+		{
+			const auto& fs = mFiredSpots[i];
+			XMVECTOR baseDir = XMLoadFloat3(&fs.BaseDir);
+			XMVECTOR up = XMVectorSet(0, 1, 0, 0);
+			XMVECTOR axis = XMVector3Normalize(XMVector3Cross(baseDir, up));
+			if (XMVector3NearEqual(axis, XMVectorZero(), XMVectorReplicate(0.001f)))
+				axis = XMVectorSet(1, 0, 0, 0);
+			XMMATRIX rot = XMMatrixRotationAxis(axis, -fs.RotAngle * kSpotRotSpeed);
+			XMVECTOR dir = XMVector3Normalize(XMVector3TransformNormal(baseDir, rot));
+
+			XMFLOAT3 dirF;
+			XMStoreFloat3(&dirF, dir);
+
+			float fade = 1.0f;
+			if (fs.Age > kSpotLifetime - 1.0f)
+				fade = kSpotLifetime - fs.Age;
+
+			mMainPassCB.Lights[baseIdx + i].Position = fs.Position;
+			mMainPassCB.Lights[baseIdx + i].Direction = dirF;
+			mMainPassCB.Lights[baseIdx + i].Strength = {
+				fs.Color.x * fade,
+				fs.Color.y * fade,
+				fs.Color.z * fade };
+			mMainPassCB.Lights[baseIdx + i].FalloffStart = 2.0f;
+			mMainPassCB.Lights[baseIdx + i].FalloffEnd = 20.0f;
+			mMainPassCB.Lights[baseIdx + i].SpotPower = 64.0f;
+		}
+		mMainPassCB.NumActiveSpotLights = 1 + min(count, kMaxFiredSpots - 1);
 	}
 
 	mShadowPass.UpdateCascades(
@@ -1378,7 +1446,7 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 		mMaterials[mat->Name] = std::move(mat);
 	}
 
-	const XMMATRIX world = XMMatrixScaling(0.2f, 0.2f, 0.2f);
+	const XMMATRIX world = XMMatrixScaling(0.02f, 0.02f, 0.02f);
 
 	for (const auto& drawArg : mesh.DrawArgs)
 	{
@@ -1521,6 +1589,42 @@ void CrateApp::OnKeyboardInput(const GameTimer& gt)
 			: "[Culling] Octree frustum culling: OFF\n");
 	}
 	mWasMDown = isMDown;
+
+	bool isGDown = (GetAsyncKeyState('G') & 0x8000) != 0;
+	if (isGDown && !mWasGDown)
+	{
+		if ((int)mFiredSpots.size() < kMaxFiredSpots - 1)
+		{
+			static const XMFLOAT3 kSpotColors[] = {
+				{8.0f, 2.0f, 0.5f},
+				{0.5f, 8.0f, 1.0f},
+				{2.0f, 0.5f, 9.0f},
+				{8.0f, 8.0f, 0.5f},
+				{0.5f, 8.0f, 8.0f},
+				{8.0f, 1.0f, 8.0f},
+			};
+			XMFLOAT3 col = kSpotColors[mNextSpotColorIdx % _countof(kSpotColors)];
+			++mNextSpotColorIdx;
+
+			XMFLOAT3 fwd = {
+				cosf(mCameraYaw) * cosf(mCameraPitch),
+				sinf(mCameraPitch),
+				sinf(mCameraYaw) * cosf(mCameraPitch)
+			};
+
+			FiredSpotLight fs;
+			fs.Position = mCameraPos;
+			fs.Velocity = { fwd.x * kSpotSpeed, fwd.y * kSpotSpeed, fwd.z * kSpotSpeed };
+			fs.BaseDir = fwd;
+			fs.Age = 0.0f;
+			fs.RotAngle = 0.0f;
+			fs.Color = col;
+			mFiredSpots.push_back(fs);
+
+			OutputDebugStringA("[Spotlight] Fired!\n");
+		}
+	}
+	mWasGDown = isGDown;
 }
 
 void CrateApp::UpdateCamera(const GameTimer& gt)

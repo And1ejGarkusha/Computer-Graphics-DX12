@@ -48,7 +48,8 @@ struct PassConstants
 
     int                 EdgeDetection = 0;
     int                 VCRFilter = 0;
-    int                 PostFXPad[2] = {};
+    int NumActiveSpotLights;
+    int PostFXPad;
 };
 
 struct Vertex

@@ -60,7 +60,8 @@ cbuffer cbPass : register(b0)
 
     int gEdgeDetection;
     int gVCRFilter;
-    int2 gPostFXPad;
+    int gNumActiveSpotLights;
+    int gPostFXPad;
 };
 
 struct VertexOut
@@ -223,7 +224,17 @@ float4 PS(VertexOut pin) : SV_Target
     mat.Metallic = metallic;
 
     float3 shadowFactor = float3(CalcShadowFactor(posW), 1.f, 1.f);
-    float4 directLight = ComputeLighting(gLights, mat, posW, N, V, shadowFactor);
+    
+    float3 directResult = 0.0f;
+    for (int di = 0; di < NUM_DIR_LIGHTS; ++di)
+        directResult += shadowFactor[di] * ComputeDirectionalLight(gLights[di], mat, N, V);
+    for (int pi = NUM_DIR_LIGHTS; pi < NUM_DIR_LIGHTS + NUM_POINT_LIGHTS; ++pi)
+        directResult += ComputePointLight(gLights[pi], mat, posW, N, V);
+    int spotBase = NUM_DIR_LIGHTS + NUM_POINT_LIGHTS;
+    for (int si = spotBase; si < spotBase + gNumActiveSpotLights; ++si)
+        directResult += ComputeSpotLight(gLights[si], mat, posW, N, V);
+
+    float4 directLight = float4(directResult, 0.0f);
 
     //IBL ambient
     float3 kS = FresnelSchlickRoughness(max(dot(N, V), 0.0f), F0, roughness);

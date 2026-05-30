@@ -171,6 +171,14 @@ VertexOut HS(InputPatch<VertexOut, 3> p,
     return p[i];
 }
 
+static const float gWaveAmplitude = 0.18f;
+static const float gWaveFreqX = 1.5f;
+static const float gWaveFreqZ = 1.2f;
+static const float gWaveFreqX2 = 0.9f;
+static const float gWaveFreqZ2 = 1.8f;
+static const float gWaveSpeedA = 1.1f;
+static const float gWaveSpeedB = 0.7f;
+
 [domain("tri")]
 DomainOut DS(PatchTess patchTess,
              float3 bary : SV_DomainLocation,
@@ -194,6 +202,23 @@ DomainOut DS(PatchTess patchTess,
     float4 posW = mul(float4(posL, 1.0f), gWorld);
     float3 normW = normalize(mul(normL, (float3x3) gWorld));
     tanW = normalize(tanW);
+    
+    if (gIsChessboard == 2)
+    {
+        float wx = posW.x;
+        float wz = posW.z;
+        float t = gTotalTime;
+        
+        float phaseA = gWaveFreqX * wx + gWaveFreqZ * wz - gWaveSpeedA * t;
+        float phaseB = gWaveFreqX2 * wx + gWaveFreqZ2 * wz - gWaveSpeedB * t * 1.3f;
+
+        float dispY = gWaveAmplitude * (sin(phaseA) + 0.6f * sin(phaseB));
+        posW.y += dispY;
+        
+        float dydx = gWaveAmplitude * (gWaveFreqX * cos(phaseA) + 0.6f * gWaveFreqX2 * cos(phaseB));
+        float dydz = gWaveAmplitude * (gWaveFreqZ * cos(phaseA) + 0.6f * gWaveFreqZ2 * cos(phaseB));
+        normW = normalize(float3(-dydx, 1.0f, -dydz));
+    }
 
     dout.NormalW = normW;
     dout.TangentW = tanW;

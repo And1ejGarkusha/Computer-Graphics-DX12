@@ -1653,7 +1653,12 @@ void CrateApp::UpdateObjectCBs(const GameTimer& gt)
 			ObjectConstants oc;
 			XMStoreFloat4x4(&oc.World, XMMatrixTranspose(XMLoadFloat4x4(&e->World)));
 			XMStoreFloat4x4(&oc.TexTransform, XMMatrixTranspose(XMLoadFloat4x4(&e->TexTransform)));
-			oc.IsChessboard = (e->Mat && e->Mat->Name == "chessboard") ? 1 : 0;
+			if (e->Mat && e->Mat->Name == "chessboard")
+				oc.IsChessboard = 1;
+			else if (e->Mat && e->Mat->Name.find("floor") != std::string::npos)
+				oc.IsChessboard = 2;
+			else
+				oc.IsChessboard = 0;
 			currObjectCB->CopyData(e->ObjCBIndex, oc);
 			e->NumFramesDirty--;
 		}

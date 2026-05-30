@@ -1,6 +1,8 @@
-Texture2D gDiffuseMap : register(t0); // albedo / diffuse
-Texture2D gNormalMap : register(t1); // tangent-space normal map
-Texture2D gDisplaceMap : register(t2); // grayscale displacement
+Texture2D gDiffuseMap : register(t0);
+Texture2D gNormalMap : register(t1);
+Texture2D gDisplaceMap : register(t2);
+Texture2D gRoughnessMap : register(t3);
+Texture2D gMetallicMap : register(t4);
 
 SamplerState gsamLinearWrap : register(s2);
 SamplerState gsamLinearClamp : register(s3);
@@ -41,7 +43,9 @@ cbuffer cbMaterial : register(b2)
     float4x4 gMatTransform;
 
     float gDispScale;
-    float3 gMatPad;
+    float gMetallic;
+    float AOScale;
+    float _padding;
 };
 
 static const float gTessMinDist = 0.0f;
@@ -202,19 +206,20 @@ DomainOut DS(PatchTess patchTess,
 GBufferOut PS(DomainOut pin)
 {
     float4 diffuse = gDiffuseMap.Sample(gsamLinearWrap, pin.TexC) * gDiffuseAlbedo;
-    
+    float roughness = gRoughnessMap.Sample(gsamLinearWrap, pin.TexC).r * gRoughness;
+    float metallic = gMetallicMap.Sample(gsamLinearWrap, pin.TexC).r * gMetallic;
+
     float3 N = normalize(pin.NormalW);
     float3 T = normalize(pin.TangentW - dot(pin.TangentW, N) * N);
     float3 B = cross(N, T);
     float3x3 TBN = float3x3(T, B, N);
-    
+
     float3 normalSample = gNormalMap.Sample(gsamLinearWrap, pin.TexC).rgb;
     float3 bumpNormal = normalSample * 2.0f - 1.0f;
-    
     float3 normalW = normalize(mul(bumpNormal, TBN));
-    
+
     GBufferOut gout;
-    gout.Albedo = float4(diffuse.rgb, gRoughness);
-    gout.Normal = float4(normalW, gFresnelR0.x);
+    gout.Albedo = float4(diffuse.rgb, roughness);
+    gout.Normal = float4(normalW * 0.5f + 0.5f, metallic);
     return gout;
 }

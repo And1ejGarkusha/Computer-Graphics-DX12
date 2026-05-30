@@ -92,18 +92,25 @@ void RenderingSystem::DrawLightingPass(
     ID3D12DescriptorHeap* srvHeap,
     D3D12_GPU_VIRTUAL_ADDRESS   passCBAddress,
     D3D12_GPU_DESCRIPTOR_HANDLE depthSRV,
-    D3D12_GPU_DESCRIPTOR_HANDLE shadowSRV)
+    D3D12_GPU_DESCRIPTOR_HANDLE shadowSRV,
+    D3D12_GPU_DESCRIPTOR_HANDLE irradianceSRV,
+    D3D12_GPU_DESCRIPTOR_HANDLE prefilterSRV,
+    D3D12_GPU_DESCRIPTOR_HANDLE brdfLutSRV)
 {
     ID3D12DescriptorHeap* heaps[] = { srvHeap };
     cmdList->SetDescriptorHeaps(1, heaps);
 
     cmdList->SetGraphicsRootDescriptorTable(0, mGBuffer.GetSRVGPUHandle());
-    
+
     cmdList->SetGraphicsRootConstantBufferView(1, passCBAddress);
-    
+
     cmdList->SetGraphicsRootDescriptorTable(2, depthSRV);
-    
+
     cmdList->SetGraphicsRootDescriptorTable(3, shadowSRV);
+
+    cmdList->SetGraphicsRootDescriptorTable(4, irradianceSRV);
+    cmdList->SetGraphicsRootDescriptorTable(5, prefilterSRV);
+    cmdList->SetGraphicsRootDescriptorTable(6, brdfLutSRV);
 
     cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmdList->IASetVertexBuffers(0, 0, nullptr);
@@ -133,11 +140,21 @@ void RenderingSystem::BuildLightingRootSignature(ID3D12Device* device)
     CD3DX12_DESCRIPTOR_RANGE shadowTable;
     shadowTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 4);
 
-    CD3DX12_ROOT_PARAMETER params[4];
+    CD3DX12_DESCRIPTOR_RANGE irradianceTable;
+    irradianceTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 5);
+    CD3DX12_DESCRIPTOR_RANGE prefilterTable;
+    prefilterTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 6);
+    CD3DX12_DESCRIPTOR_RANGE brdfLutTable;
+    brdfLutTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 7);
+
+    CD3DX12_ROOT_PARAMETER params[7];
     params[0].InitAsDescriptorTable(1, &gbufferTable, D3D12_SHADER_VISIBILITY_PIXEL);
     params[1].InitAsConstantBufferView(0);
     params[2].InitAsDescriptorTable(1, &depthTable, D3D12_SHADER_VISIBILITY_PIXEL);
     params[3].InitAsDescriptorTable(1, &shadowTable, D3D12_SHADER_VISIBILITY_PIXEL);
+    params[4].InitAsDescriptorTable(1, &irradianceTable, D3D12_SHADER_VISIBILITY_PIXEL);
+    params[5].InitAsDescriptorTable(1, &prefilterTable, D3D12_SHADER_VISIBILITY_PIXEL);
+    params[6].InitAsDescriptorTable(1, &brdfLutTable, D3D12_SHADER_VISIBILITY_PIXEL);
 
     CD3DX12_STATIC_SAMPLER_DESC linearClamp(
         0,
@@ -157,7 +174,14 @@ void RenderingSystem::BuildLightingRootSignature(ID3D12Device* device)
         D3D12_COMPARISON_FUNC_LESS_EQUAL,
         D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE);
 
-    CD3DX12_STATIC_SAMPLER_DESC samplers[2] = { linearClamp, shadowSampler };
+    CD3DX12_STATIC_SAMPLER_DESC linearWrap(
+        2,
+        D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP);
+
+    CD3DX12_STATIC_SAMPLER_DESC samplers[3] = { linearClamp, shadowSampler, linearWrap };
 
     CD3DX12_ROOT_SIGNATURE_DESC sigDesc(
         _countof(params), params,

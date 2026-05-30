@@ -43,7 +43,10 @@ public:
         ID3D12DescriptorHeap* srvHeap,
         D3D12_GPU_VIRTUAL_ADDRESS   passCBAddress,
         D3D12_GPU_DESCRIPTOR_HANDLE depthSRV,
-        D3D12_GPU_DESCRIPTOR_HANDLE shadowSRV);
+        D3D12_GPU_DESCRIPTOR_HANDLE shadowSRV,
+        D3D12_GPU_DESCRIPTOR_HANDLE irradianceSRV,
+        D3D12_GPU_DESCRIPTOR_HANDLE prefilterSRV,
+        D3D12_GPU_DESCRIPTOR_HANDLE brdfLutSRV);
 
     void ToggleWireframe() { mWireframeMode = !mWireframeMode; }
     bool IsWireframe()     const { return mWireframeMode; }

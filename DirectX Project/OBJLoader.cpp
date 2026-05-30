@@ -65,13 +65,48 @@ bool OBJLoader::LoadMTL(const std::string& filename,
         {
             float shininess;
             iss >> shininess;
-            currentMaterial.Roughness = 1.0f - (shininess / 1000.0f);
-            currentMaterial.Roughness = std::clamp(currentMaterial.Roughness, 0.05f, 0.95f);
+            if (currentMaterial.Roughness == 0.5f)
+            {
+                currentMaterial.Roughness = 1.0f - (shininess / 1000.0f);
+                currentMaterial.Roughness = std::clamp(currentMaterial.Roughness, 0.05f, 0.95f);
+            }
+        }
+        else if (prefix == "Pr")
+        {
+            iss >> currentMaterial.Roughness;
+            currentMaterial.Roughness = std::clamp(currentMaterial.Roughness, 0.0f, 1.0f);
+            OutputDebugStringA(("  Roughness (Pr): " + std::to_string(currentMaterial.Roughness) + "\n").c_str());
+        }
+        else if (prefix == "Pl")
+        {
+            iss >> currentMaterial.Metallic;
+            currentMaterial.Metallic = std::clamp(currentMaterial.Metallic, 0.0f, 1.0f);
+            OutputDebugStringA(("  Metallic (Pl): " + std::to_string(currentMaterial.Metallic) + "\n").c_str());
+        }
+        else if (prefix == "Pds")
+        {
+            iss >> currentMaterial.AOScale;
+            OutputDebugStringA(("  AO Scale (Pds): " + std::to_string(currentMaterial.AOScale) + "\n").c_str());
         }
         else if (prefix == "map_Kd")
         {
             iss >> currentMaterial.DiffuseMapPath;
-            OutputDebugStringA(("Diffuse tex: " + currentMaterial.DiffuseMapPath + "\n").c_str());
+            OutputDebugStringA(("  Diffuse tex: " + currentMaterial.DiffuseMapPath + "\n").c_str());
+        }
+        else if (prefix == "map_Pr")
+        {
+            iss >> currentMaterial.RoughnessMapPath;
+            OutputDebugStringA(("  Roughness map: " + currentMaterial.RoughnessMapPath + "\n").c_str());
+        }
+        else if (prefix == "map_Pl")
+        {
+            iss >> currentMaterial.MetallicMapPath;
+            OutputDebugStringA(("  Metallic map: " + currentMaterial.MetallicMapPath + "\n").c_str());
+        }
+        else if (prefix == "map_AO" || prefix == "map_Occlusion")
+        {
+            iss >> currentMaterial.AOMapPath;
+            OutputDebugStringA(("  AO map: " + currentMaterial.AOMapPath + "\n").c_str());
         }
         else if (prefix == "map_Bump" || prefix == "bump")
         {
@@ -84,12 +119,12 @@ bool OBJLoader::LoadMTL(const std::string& filename,
                 iss >> token;
             }
             currentMaterial.NormalMapPath = token;
-            OutputDebugStringA(("Normal map: " + currentMaterial.NormalMapPath + "\n").c_str());
+            OutputDebugStringA(("  Normal map: " + currentMaterial.NormalMapPath + "\n").c_str());
         }
         else if (prefix == "map_Disp")
         {
             iss >> currentMaterial.DisplaceMapPath;
-            OutputDebugStringA(("Displacement map: " + currentMaterial.DisplaceMapPath + "\n").c_str());
+            OutputDebugStringA(("  Displacement map: " + currentMaterial.DisplaceMapPath + "\n").c_str());
         }
         else if (prefix == "d")
         {

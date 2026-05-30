@@ -174,7 +174,9 @@ struct MaterialConstants
 	DirectX::XMFLOAT4X4 MatTransform = MathHelper::Identity4x4();
 
 	float DispScale = 0.0f;
-	DirectX::XMFLOAT3 Padding = { 0.0f, 0.0f, 0.0f };
+	float Metallic = 0.0f;
+	float AOScale = 1.0f;
+	float Padding = 0.0f;
 };
 
 struct Material
@@ -197,6 +199,12 @@ struct Material
 	DirectX::XMFLOAT4X4 MatTransform = MathHelper::Identity4x4();
 
 	float DispScale = 0.0f;
+	float Metallic = 0.0f;
+	float AOScale = 1.0f;
+
+	int RoughnessSrvHeapIndex = -1;
+	int MetallicSrvHeapIndex = -1;
+	int AOSrvHeapIndex = -1;
 };
 
 struct Texture

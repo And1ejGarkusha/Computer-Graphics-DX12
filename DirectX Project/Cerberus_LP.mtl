@@ -1,0 +1,8 @@
+# MTL file - created by a modified js OBJExporter
+
+newmtl 08Default
+map_Kd ibl/Textures/Cerberus_A.tga
+map_Bump ibl/Textures/Cerberus_N.tga
+map_Pl ibl/Textures/Cerberus_M.tga
+map_Pr ibl/Textures/Cerberus_R.tga
+

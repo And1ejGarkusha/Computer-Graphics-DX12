@@ -18,8 +18,15 @@ struct OBJMaterialData
     DirectX::XMFLOAT4 DiffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
     DirectX::XMFLOAT3 FresnelR0 = { 0.05f, 0.05f, 0.05f };
     float Roughness = 0.5f;
+    float Metallic = 0.0f;
+    float AOScale = 1.0f;
 
     std::string DiffuseMapPath;
+
+    std::string MetallicMapPath;
+    std::string RoughnessMapPath;
+    std::string AOMapPath;
+
     std::string NormalMapPath;
     std::string DisplaceMapPath;
 };

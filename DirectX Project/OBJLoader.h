@@ -33,10 +33,12 @@ struct OBJMaterialData
 
 struct OBJMeshData
 {
-    std::vector<OBJVertexData> Vertices;
-    std::vector<std::uint32_t> Indices;
-    std::unordered_map<std::string, SubmeshGeometry> DrawArgs;
-    std::unordered_map<std::string, std::string> SubmeshToMaterial;
+    std::vector<OBJVertexData>                          Vertices;
+    std::vector<std::uint32_t>                          Indices;
+    std::vector<std::uint32_t>                          IndicesLOD1;
+    std::unordered_map<std::string, SubmeshGeometry>    DrawArgs;
+    std::unordered_map<std::string, SubmeshGeometry>    DrawArgsLOD1;
+    std::unordered_map<std::string, std::string>        SubmeshToMaterial;
 };
 
 class OBJLoader

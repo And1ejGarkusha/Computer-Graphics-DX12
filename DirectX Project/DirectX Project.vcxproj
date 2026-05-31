@@ -125,6 +125,26 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Camera.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\allocator.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\clusterizer.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\indexanalyzer.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\indexcodec.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\indexgenerator.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\meshletcodec.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\meshletutils.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\opacitymap.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\overdrawoptimizer.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\partition.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\quantization.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\rasterizer.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\simplifier.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\spatialorder.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\stripifier.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\tangentspace.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\vcacheoptimizer.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\vertexcodec.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\vertexfilter.cpp" />
+    <ClCompile Include="Deps\meshoptimizer\vfetchoptimizer.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="d3dApp.cpp" />
     <ClCompile Include="d3dUtil.cpp" />

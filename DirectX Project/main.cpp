@@ -81,8 +81,17 @@ struct RenderItem
 	UINT StartIndexLocation = 0;
 	int  BaseVertexLocation = 0;
 
+	UINT LOD1IndexCount = 0;
+	UINT LOD1StartIndexLocation = 0;
+
 	BoundingBox WorldBounds = BoundingBox(
 		XMFLOAT3(0, 0, 0), XMFLOAT3(FLT_MAX, FLT_MAX, FLT_MAX));
+
+	float Lod0to1DistSq = 10.0f * 10.0f;
+	float Lod1to2DistSq = 40.0f * 40.0f;
+
+	XMFLOAT3 WorldCenter = { 0.0f, 0.0f, 0.0f };
+	XMFLOAT3 WorldExtents = { 1.0f, 1.0f, 1.0f };
 };
 
 class CrateApp : public D3DApp
@@ -132,6 +141,10 @@ private:
 		CXMMATRIX world);
 
 	void DrawRenderItems(ID3D12GraphicsCommandList* cmdList,
+		const std::vector<RenderItem*>& ritems);
+	void DrawRenderItemsLOD1(ID3D12GraphicsCommandList* cmdList,
+		const std::vector<RenderItem*>& ritems);
+	void DrawRenderItemsBillboard(ID3D12GraphicsCommandList* cmdList,
 		const std::vector<RenderItem*>& ritems);
 
 	std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> GetStaticSamplers();
@@ -185,6 +198,9 @@ private:
 	std::vector<RenderItem*>                 mOpaqueRitems;
 
 	std::vector<RenderItem*> mVisibleRitems;
+	std::vector<RenderItem*> mLOD0Ritems;
+	std::vector<RenderItem*> mLOD1Ritems;
+	std::vector<RenderItem*> mLOD2Ritems;
 	Octree                   mOctree;
 	bool mFrustumCullingEnabled = false;
 	bool mOctreeCullingEnabled = false;
@@ -516,13 +532,29 @@ void CrateApp::Update(const GameTimer& gt)
 	UpdateCamera(gt);
 
 	char title[256];
-	sprintf_s(title,
-		"DX12 - fps: %.1f | visible: %zu / %zu | Simple FC: %s | Octree FC: %s",
-		1.0f / gt.DeltaTime(),
-		mVisibleRitems.size(),
-		mOpaqueRitems.size(),
-		mFrustumCullingEnabled ? "ON" : "OFF",
-		mOctreeCullingEnabled ? "ON" : "OFF");
+	if (!mLOD2Ritems.empty())
+	{
+		auto* ri = mLOD2Ritems[0];
+		float hw = max(ri->WorldExtents.x, ri->WorldExtents.z);
+		float hh = ri->WorldExtents.y;
+		sprintf_s(title,
+			"DX12 - fps: %.1f | LOD0: %zu | LOD1: %zu | BB: %zu | vis: %zu/%zu | BB[0] hw=%.2f hh=%.2f cx=%.1f cy=%.1f cz=%.1f",
+			1.0f / gt.DeltaTime(),
+			mLOD0Ritems.size(), mLOD1Ritems.size(), mLOD2Ritems.size(),
+			mVisibleRitems.size(), mOpaqueRitems.size(),
+			hw, hh,
+			ri->WorldCenter.x, ri->WorldCenter.y, ri->WorldCenter.z);
+	}
+	else
+	{
+		sprintf_s(title,
+			"DX12 - fps: %.1f | LOD0: %zu | LOD1: %zu | BB: %zu | vis: %zu/%zu | FC: %s | Oct: %s",
+			1.0f / gt.DeltaTime(),
+			mLOD0Ritems.size(), mLOD1Ritems.size(), mLOD2Ritems.size(),
+			mVisibleRitems.size(), mOpaqueRitems.size(),
+			mFrustumCullingEnabled ? "ON" : "OFF",
+			mOctreeCullingEnabled ? "ON" : "OFF");
+	}
 
 	SetWindowTextA(mhMainWnd, title);
 
@@ -604,6 +636,28 @@ void CrateApp::Draw(const GameTimer& gt)
 			" of " + std::to_string(mOpaqueRitems.size()) + "\n").c_str());
 	}
 
+	mLOD0Ritems.clear(); mLOD1Ritems.clear(); mLOD2Ritems.clear();
+	mLOD0Ritems.reserve(mVisibleRitems.size());
+	mLOD1Ritems.reserve(mVisibleRitems.size());
+	mLOD2Ritems.reserve(mVisibleRitems.size());
+	{
+		XMVECTOR eyePos = XMLoadFloat3(&mEyePos);
+		for (auto* ri : mVisibleRitems)
+		{
+			XMVECTOR center = XMLoadFloat3(&ri->WorldCenter);
+			XMVECTOR extents = XMLoadFloat3(&ri->WorldExtents);
+			XMVECTOR boxMin = XMVectorSubtract(center, extents);
+			XMVECTOR boxMax = XMVectorAdd(center, extents);
+			XMVECTOR closest = XMVectorClamp(eyePos, boxMin, boxMax);
+			float distSq = XMVectorGetX(
+				XMVector3LengthSq(XMVectorSubtract(eyePos, closest)));
+
+			if (distSq < ri->Lod0to1DistSq) mLOD0Ritems.push_back(ri);
+			else if (distSq < ri->Lod1to2DistSq) mLOD1Ritems.push_back(ri);
+			else                                  mLOD2Ritems.push_back(ri);
+		}
+	}
+
 	ID3D12DescriptorHeap* heaps[] = { mSrvDescriptorHeap.Get() };
 	mCommandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
@@ -648,7 +702,26 @@ void CrateApp::Draw(const GameTimer& gt)
 	mCommandList->SetGraphicsRootConstantBufferView(kRootPassCB,
 		passCB->GetGPUVirtualAddress());
 
-	DrawRenderItems(mCommandList.Get(), mVisibleRitems);
+	if (!mLOD0Ritems.empty())
+	{
+		mCommandList->SetPipelineState(
+			mRenderingSystem.IsWireframe()
+			? mRenderingSystem.GetGeometryPSO()
+			: mRenderingSystem.GetGeometryPSO());
+		DrawRenderItems(mCommandList.Get(), mLOD0Ritems);
+	}
+
+	if (!mLOD1Ritems.empty())
+	{
+		mCommandList->SetPipelineState(mRenderingSystem.GetGeometryLOD1PSO());
+		DrawRenderItemsLOD1(mCommandList.Get(), mLOD1Ritems);
+	}
+
+	if (!mLOD2Ritems.empty())
+	{
+		mCommandList->SetPipelineState(mRenderingSystem.GetBillboardPSO());
+		DrawRenderItemsBillboard(mCommandList.Get(), mLOD2Ritems);
+	}
 
 	mRenderingSystem.EndGeometryPass(mCommandList.Get());
 
@@ -1141,6 +1214,8 @@ void CrateApp::BuildRenderItems()
 
 		BoundingBox localBounds(XMFLOAT3(0, 0, 0), XMFLOAT3(2.5f, 0.02f, 2.5f));
 		localBounds.Transform(item->WorldBounds, world);
+		item->WorldCenter = item->WorldBounds.Center;
+		item->WorldExtents = item->WorldBounds.Extents;
 
 		mAllRitems.push_back(std::move(item));
 	}
@@ -1179,6 +1254,8 @@ void CrateApp::BuildRenderItems()
 			item->BaseVertexLocation = boxSub.BaseVertexLocation;
 			XMStoreFloat4x4(&item->World, world);
 			localBoxBounds.Transform(item->WorldBounds, world);
+			item->WorldCenter = item->WorldBounds.Center;
+			item->WorldExtents = item->WorldBounds.Extents;
 			mAllRitems.push_back(std::move(item));
 		}
 	}
@@ -1200,6 +1277,8 @@ void CrateApp::BuildRenderItems()
 
 		BoundingBox localBounds(XMFLOAT3(0, 0, 0), XMFLOAT3(0.5f, 0.5f, 0.5f));
 		localBounds.Transform(item->WorldBounds, world);
+		item->WorldCenter = item->WorldBounds.Center;
+		item->WorldExtents = item->WorldBounds.Extents;
 
 		mAllRitems.push_back(std::move(item));
 	}
@@ -1350,25 +1429,39 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 	}
 
 	const UINT vbBytes = (UINT)vertices.size() * sizeof(Vertex);
-	const UINT ibBytes = (UINT)mesh.Indices.size() * sizeof(std::uint32_t);
+
+	const UINT lod0IndexCount = (UINT)mesh.Indices.size();
+	const UINT lod1Offset = lod0IndexCount;
+	for (auto& kv : mesh.DrawArgsLOD1)
+		kv.second.StartIndexLocation += lod1Offset;
+
+	std::vector<std::uint32_t> allIndices;
+	allIndices.reserve(mesh.Indices.size() + mesh.IndicesLOD1.size());
+	allIndices.insert(allIndices.end(), mesh.Indices.begin(), mesh.Indices.end());
+	allIndices.insert(allIndices.end(), mesh.IndicesLOD1.begin(), mesh.IndicesLOD1.end());
+
+	const UINT ibBytes = (UINT)allIndices.size() * sizeof(std::uint32_t);
 
 	auto geo = std::make_unique<MeshGeometry>();
 	geo->Name = modelName;
 	ThrowIfFailed(D3DCreateBlob(vbBytes, &geo->VertexBufferCPU));
 	CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), vertices.data(), vbBytes);
 	ThrowIfFailed(D3DCreateBlob(ibBytes, &geo->IndexBufferCPU));
-	CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), mesh.Indices.data(), ibBytes);
+	CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), allIndices.data(), ibBytes);
 
 	geo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
 		mCommandList.Get(), vertices.data(), vbBytes, geo->VertexBufferUploader);
 	geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
-		mCommandList.Get(), mesh.Indices.data(), ibBytes, geo->IndexBufferUploader);
+		mCommandList.Get(), allIndices.data(), ibBytes, geo->IndexBufferUploader);
 
 	geo->VertexByteStride = sizeof(Vertex);
 	geo->VertexBufferByteSize = vbBytes;
 	geo->IndexFormat = DXGI_FORMAT_R32_UINT;
 	geo->IndexBufferByteSize = ibBytes;
 	geo->DrawArgs = mesh.DrawArgs;
+	for (const auto& kv : mesh.DrawArgsLOD1)
+		geo->DrawArgs["lod1_" + kv.first] = kv.second;
+
 	mGeometries[geo->Name] = std::move(geo);
 
 	std::string modelDir;
@@ -1470,6 +1563,18 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 		item->IndexCount = drawArg.second.IndexCount;
 		item->StartIndexLocation = drawArg.second.StartIndexLocation;
 		item->BaseVertexLocation = drawArg.second.BaseVertexLocation;
+
+		auto lod1It = item->Geo->DrawArgs.find("lod1_" + drawArg.first);
+		if (lod1It != item->Geo->DrawArgs.end())
+		{
+			item->LOD1IndexCount = lod1It->second.IndexCount;
+			item->LOD1StartIndexLocation = lod1It->second.StartIndexLocation;
+		}
+		else
+		{
+			item->LOD1IndexCount = item->IndexCount;
+			item->LOD1StartIndexLocation = item->StartIndexLocation;
+		}
 		XMStoreFloat4x4(&item->World, world);
 
 		item->WorldBounds = ComputeWorldBounds(
@@ -1477,6 +1582,8 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 			drawArg.second.StartIndexLocation, drawArg.second.IndexCount,
 			drawArg.second.BaseVertexLocation,
 			world);
+		item->WorldCenter = item->WorldBounds.Center;
+		item->WorldExtents = item->WorldBounds.Extents;
 
 		mAllRitems.push_back(std::move(item));
 	}
@@ -1659,6 +1766,8 @@ void CrateApp::UpdateObjectCBs(const GameTimer& gt)
 				oc.IsChessboard = 2;
 			else
 				oc.IsChessboard = 0;
+			oc.BillboardHalfW = max(e->WorldExtents.x, e->WorldExtents.z);
+			oc.BillboardHalfH = e->WorldExtents.y;
 			currObjectCB->CopyData(e->ObjCBIndex, oc);
 			e->NumFramesDirty--;
 		}
@@ -1960,6 +2069,100 @@ void CrateApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList,
 
 		cmdList->DrawIndexedInstanced(ri->IndexCount, 1,
 			ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+	}
+}
+
+void CrateApp::DrawRenderItemsLOD1(ID3D12GraphicsCommandList* cmdList,
+	const std::vector<RenderItem*>& ritems)
+{
+	UINT objCBBytes = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
+	UINT matCBBytes = d3dUtil::CalcConstantBufferByteSize(sizeof(MaterialConstants));
+	auto objectCB = mCurrFrameResource->ObjectCB->Resource();
+	auto matCB = mCurrFrameResource->MaterialCB->Resource();
+
+	for (const auto* ri : ritems)
+	{
+		const bool  hasLOD1 = ri->LOD1IndexCount > 0;
+		const UINT  drawCount = hasLOD1 ? ri->LOD1IndexCount : ri->IndexCount;
+		const UINT  drawStart = hasLOD1 ? ri->LOD1StartIndexLocation : ri->StartIndexLocation;
+		const int   drawBaseVert = hasLOD1 ? 0 : ri->BaseVertexLocation;
+		auto vbv = ri->Geo->VertexBufferView();
+		auto ibv = ri->Geo->IndexBufferView();
+		cmdList->IASetVertexBuffers(0, 1, &vbv);
+		cmdList->IASetIndexBuffer(&ibv);
+		cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+		D3D12_GPU_VIRTUAL_ADDRESS objAddr =
+			objectCB->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBBytes;
+		D3D12_GPU_VIRTUAL_ADDRESS matAddr =
+			matCB->GetGPUVirtualAddress() + ri->Mat->MatCBIndex * matCBBytes;
+
+		CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		diffuseTex.Offset(ri->Mat->DiffuseSrvHeapIndex, mCbvSrvDescriptorSize);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE normalTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		normalTex.Offset(ri->Mat->NormalSrvHeapIndex, mCbvSrvDescriptorSize);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE dispTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		dispTex.Offset(ri->Mat->DispSrvHeapIndex, mCbvSrvDescriptorSize);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE roughnessTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		roughnessTex.Offset(ri->Mat->RoughnessSrvHeapIndex, mCbvSrvDescriptorSize);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE metallicTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		metallicTex.Offset(ri->Mat->MetallicSrvHeapIndex, mCbvSrvDescriptorSize);
+
+		cmdList->SetGraphicsRootDescriptorTable(kRootDiffuse, diffuseTex);
+		cmdList->SetGraphicsRootConstantBufferView(kRootObjCB, objAddr);
+		cmdList->SetGraphicsRootConstantBufferView(kRootMatCB, matAddr);
+		cmdList->SetGraphicsRootDescriptorTable(kRootNormal, normalTex);
+		cmdList->SetGraphicsRootDescriptorTable(kRootDisplace, dispTex);
+		cmdList->SetGraphicsRootDescriptorTable(kRootRoughness, roughnessTex);
+		cmdList->SetGraphicsRootDescriptorTable(kRootMetallic, metallicTex);
+
+		cmdList->DrawIndexedInstanced(
+			drawCount, 1,
+			drawStart, drawBaseVert, 0);
+	}
+}
+
+void CrateApp::DrawRenderItemsBillboard(ID3D12GraphicsCommandList* cmdList,
+	const std::vector<RenderItem*>& ritems)
+{
+	UINT objCBBytes = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
+	UINT matCBBytes = d3dUtil::CalcConstantBufferByteSize(sizeof(MaterialConstants));
+	auto objectCB = mCurrFrameResource->ObjectCB->Resource();
+	auto matCB = mCurrFrameResource->MaterialCB->Resource();
+
+	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
+
+	for (const auto* ri : ritems)
+	{
+		auto vbv = ri->Geo->VertexBufferView();
+		cmdList->IASetVertexBuffers(0, 1, &vbv);
+		cmdList->IASetIndexBuffer(nullptr);
+
+		D3D12_GPU_VIRTUAL_ADDRESS objAddr =
+			objectCB->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBBytes;
+		D3D12_GPU_VIRTUAL_ADDRESS matAddr =
+			matCB->GetGPUVirtualAddress() + ri->Mat->MatCBIndex * matCBBytes;
+
+		CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		diffuseTex.Offset(ri->Mat->DiffuseSrvHeapIndex, mCbvSrvDescriptorSize);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE normalTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		normalTex.Offset(kDefaultNormalSlot, mCbvSrvDescriptorSize);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE dispTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		dispTex.Offset(kDefaultDispSlot, mCbvSrvDescriptorSize);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE roughnessTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		roughnessTex.Offset(ri->Mat->RoughnessSrvHeapIndex, mCbvSrvDescriptorSize);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE metallicTex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		metallicTex.Offset(ri->Mat->MetallicSrvHeapIndex, mCbvSrvDescriptorSize);
+
+		cmdList->SetGraphicsRootDescriptorTable(kRootDiffuse, diffuseTex);
+		cmdList->SetGraphicsRootConstantBufferView(kRootObjCB, objAddr);
+		cmdList->SetGraphicsRootConstantBufferView(kRootMatCB, matAddr);
+		cmdList->SetGraphicsRootDescriptorTable(kRootNormal, normalTex);
+		cmdList->SetGraphicsRootDescriptorTable(kRootDisplace, dispTex);
+		cmdList->SetGraphicsRootDescriptorTable(kRootRoughness, roughnessTex);
+		cmdList->SetGraphicsRootDescriptorTable(kRootMetallic, metallicTex);
+
+		cmdList->DrawInstanced(1, 1, ri->BaseVertexLocation, 0);
 	}
 }
 

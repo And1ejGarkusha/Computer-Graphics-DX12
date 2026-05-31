@@ -51,10 +51,12 @@ public:
     void ToggleWireframe() { mWireframeMode = !mWireframeMode; }
     bool IsWireframe()     const { return mWireframeMode; }
 
-    ID3D12RootSignature* GetLightingRootSig() const { return mLightingRootSig.Get(); }
-    ID3D12PipelineState* GetGeometryPSO()     const { return mGeometryPSO.Get(); }
-    ID3D12PipelineState* GetLightingPSO()     const { return mLightingPSO.Get(); }
-    const GBuffer& GetGBuffer()         const { return mGBuffer; }
+    ID3D12RootSignature* GetLightingRootSig()  const { return mLightingRootSig.Get(); }
+    ID3D12PipelineState* GetGeometryPSO()      const { return mGeometryPSO.Get(); }
+    ID3D12PipelineState* GetGeometryLOD1PSO()  const { return mGeometryLOD1PSO.Get(); }
+    ID3D12PipelineState* GetBillboardPSO()     const { return mBillboardPSO.Get(); }
+    ID3D12PipelineState* GetLightingPSO()      const { return mLightingPSO.Get(); }
+    const GBuffer& GetGBuffer()                const { return mGBuffer; }
 
 private:
     void BuildRtvHeap(ID3D12Device* device);
@@ -68,8 +70,11 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mGBufferRtvHeap;
     Microsoft::WRL::ComPtr<ID3D12RootSignature>  mLightingRootSig;
+
     Microsoft::WRL::ComPtr<ID3D12PipelineState>  mGeometryPSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>  mGeometryWireframePSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>  mGeometryLOD1PSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>  mBillboardPSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>  mLightingPSO;
 
     bool mWireframeMode = false;

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <map>
 #include <tuple>
+#include "Deps/meshoptimizer/meshoptimizer.h"
 
 using namespace DirectX;
 
@@ -225,6 +226,40 @@ bool OBJLoader::Load(const std::string& filename,
                 OutputDebugStringA(("Saved submesh: " + currentSubmesh +
                     " | Mat: " + currentMaterial +
                     " | Indices: " + std::to_string(submesh.IndexCount) + "\n").c_str());
+
+                const size_t lod0IndexCount = submesh.IndexCount;
+                const size_t targetIndexCount = std::max<size_t>(
+                    3u, static_cast<size_t>(lod0IndexCount * 0.2f));
+
+                std::vector<std::uint32_t> lod1Buf(lod0IndexCount);
+                size_t lod1Count = meshopt_simplify(
+                    lod1Buf.data(),
+                    outMesh.Indices.data() + currentStartIndex,
+                    lod0IndexCount,
+                    &outMesh.Vertices[0].Position.x,
+                    outMesh.Vertices.size(),
+                    sizeof(OBJVertexData),
+                    targetIndexCount,
+                    0.05f
+                );
+
+                OutputDebugStringA(("  LOD1: " + std::to_string(lod0IndexCount / 3) +
+                    " -> " + std::to_string(lod1Count / 3) + " tris\n").c_str());
+
+                if (lod1Count >= 3)
+                {
+                    lod1Buf.resize(lod1Count);
+
+                    const UINT lod1Start = (UINT)outMesh.IndicesLOD1.size();
+                    outMesh.IndicesLOD1.insert(
+                        outMesh.IndicesLOD1.end(), lod1Buf.begin(), lod1Buf.end());
+
+                    SubmeshGeometry submeshLOD1;
+                    submeshLOD1.IndexCount = (UINT)lod1Count;
+                    submeshLOD1.StartIndexLocation = lod1Start;
+                    submeshLOD1.BaseVertexLocation = currentBaseVertex;
+                    outMesh.DrawArgsLOD1[currentSubmesh] = submeshLOD1;
+                }
             }
         };
 

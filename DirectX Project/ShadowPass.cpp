@@ -58,7 +58,7 @@ void ShadowPass::Render(
     ID3D12GraphicsCommandList* cmdList,
     ShadowMap& shadowMap,
     const FrameResource& frameRes,
-    std::function<void(ID3D12GraphicsCommandList*, int)> drawCallback)
+    ShadowDrawCallback drawCallback)
 {
     shadowMap.TransitionToDepthWrite(cmdList);
 
@@ -76,9 +76,10 @@ void ShadowPass::Render(
         D3D12_GPU_VIRTUAL_ADDRESS cbAddr =
             frameRes.ShadowPassCB->Resource()->GetGPUVirtualAddress()
             + (UINT64)cascade * shadowCBStride;
-        cmdList->SetGraphicsRootConstantBufferView(1, cbAddr);
+        cmdList->SetGraphicsRootConstantBufferView(kRootShadowPassCB, cbAddr);
 
-        drawCallback(cmdList, cascade);
+        D3D12_GPU_DESCRIPTOR_HANDLE nullHandle = {};
+        drawCallback(cmdList, cascade, nullHandle);
     }
 
     shadowMap.TransitionToShaderResource(cmdList);
@@ -150,12 +151,26 @@ XMMATRIX ShadowPass::ComputeLightViewProj(
 
 void ShadowPass::BuildRootSignature(ID3D12Device* device)
 {
-    CD3DX12_ROOT_PARAMETER params[2];
-    params[0].InitAsConstantBufferView(0);
-    params[1].InitAsConstantBufferView(1);
+
+    CD3DX12_DESCRIPTOR_RANGE diffuseRange;
+    diffuseRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+
+    CD3DX12_ROOT_PARAMETER params[3];
+    params[kRootObjCB].InitAsConstantBufferView(0);
+    params[kRootShadowPassCB].InitAsConstantBufferView(1);
+    params[kRootDiffuseTex].InitAsDescriptorTable(
+        1, &diffuseRange, D3D12_SHADER_VISIBILITY_PIXEL);
+
+    CD3DX12_STATIC_SAMPLER_DESC staticSampler(
+        0,
+        D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP);
 
     CD3DX12_ROOT_SIGNATURE_DESC sigDesc(
-        _countof(params), params, 0, nullptr,
+        _countof(params), params,
+        1, &staticSampler,
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     Microsoft::WRL::ComPtr<ID3DBlob> serialized, error;
@@ -182,20 +197,24 @@ void ShadowPass::BuildPSO(
     auto vsShadow = d3dUtil::CompileShader(
         L"Shaders\\Shadow.hlsl", nullptr, "VS", "vs_5_0");
 
+    auto psShadow = d3dUtil::CompileShader(
+        L"Shaders\\Shadow.hlsl", nullptr, "PS", "ps_5_0");
+
     D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
     desc.InputLayout = { inputLayout.data(), (UINT)inputLayout.size() };
     desc.pRootSignature = mRootSig.Get();
     desc.VS = { reinterpret_cast<BYTE*>(vsShadow->GetBufferPointer()),
-                            vsShadow->GetBufferSize() };
-    desc.PS = {};
+                vsShadow->GetBufferSize() };
+    desc.PS = { reinterpret_cast<BYTE*>(psShadow->GetBufferPointer()),
+                psShadow->GetBufferSize() };
 
     D3D12_RASTERIZER_DESC raster = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     raster.DepthBias = 8000;
     raster.SlopeScaledDepthBias = 1.5f;
     raster.DepthBiasClamp = 0.0f;
-    raster.CullMode = D3D12_CULL_MODE_BACK;
-    desc.RasterizerState = raster;
+    raster.CullMode = D3D12_CULL_MODE_NONE;
 
+    desc.RasterizerState = raster;
     desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
     desc.SampleMask = UINT_MAX;

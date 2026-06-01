@@ -58,6 +58,7 @@ static const int kDefaultMetallicSlot = 5;
 static const int kDefaultAOSlot = 6;
 static const int kObjTexBaseSlot = 7;
 static const UINT kDefaultDiffuseSlot = kObjTexBaseSlot + 100;
+static const UINT kFenceDiffuseSlot = kObjTexBaseSlot + 101;
 
 static const int kNumScatteredObjects = 2000;
 
@@ -464,6 +465,8 @@ bool CrateApp::Initialize()
 	CreateSolidTexture("defaultAO", kDefaultAOSlot, 255, 255, 255, 255);
 	CreateSolidTexture("defaultDiffuse", kDefaultDiffuseSlot, 255, 255, 255, 255);
 
+	LoadTextureFromFile("textures/i_4.tga", "fenceTex", (int)kFenceDiffuseSlot);
+
 	CreateChessboardTexture();
 	BuildShadersAndInputLayout();
 	BuildShapeGeometry();
@@ -669,7 +672,7 @@ void CrateApp::Draw(const GameTimer& gt)
 		mCommandList.Get(),
 		mShadowMap,
 		*mCurrFrameResource,
-		[&](ID3D12GraphicsCommandList* cl, int)
+		[&](ID3D12GraphicsCommandList* cl, int, D3D12_GPU_DESCRIPTOR_HANDLE)
 		{
 			for (const auto* ri : mOpaqueRitems)
 			{
@@ -681,7 +684,14 @@ void CrateApp::Draw(const GameTimer& gt)
 				D3D12_GPU_VIRTUAL_ADDRESS objAddr =
 					objectCBResource->GetGPUVirtualAddress()
 					+ (UINT64)ri->ObjCBIndex * objCBSize;
-				cl->SetGraphicsRootConstantBufferView(0, objAddr);
+				cl->SetGraphicsRootConstantBufferView(
+					ShadowPass::kRootObjCB, objAddr);
+
+				CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseTex(
+					mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+				diffuseTex.Offset(ri->Mat->DiffuseSrvHeapIndex, mCbvSrvDescriptorSize);
+				cl->SetGraphicsRootDescriptorTable(
+					ShadowPass::kRootDiffuseTex, diffuseTex);
 
 				cl->DrawIndexedInstanced(
 					ri->IndexCount, 1,
@@ -821,7 +831,7 @@ void CrateApp::UpdateMainPassCB(const GameTimer& gt)
 	mMainPassCB.AmbientLight = { 0.15f, 0.15f, 0.15f, 1.0f };
 
 	//Directional light
-	mMainPassCB.Lights[0].Direction = { 0.3f, -1.0f, 0.3f };
+	mMainPassCB.Lights[0].Direction = { 0.0f, -1.0f, 0.0f };
 	mMainPassCB.Lights[0].Strength = { 6.0f,  6.0f,  6.0f };
 
 	//Point light
@@ -1123,6 +1133,56 @@ void CrateApp::BuildShapeGeometry()
 		geo->DrawArgs["sphere"] = sub;
 		mGeometries[geo->Name] = std::move(geo);
 	}
+
+	{
+		std::vector<Vertex> verts(4);
+		verts[0].Pos = { -5.0f, 0.0f, -5.0f };
+		verts[0].Normal = { 0.0f, 1.0f,  0.0f };
+		verts[0].TexC = { 0.0f, 0.0f };
+		verts[0].Tangent = { 1.0f, 0.0f,  0.0f };
+
+		verts[1].Pos = { 5.0f, 0.0f, -5.0f };
+		verts[1].Normal = { 0.0f, 1.0f,  0.0f };
+		verts[1].TexC = { 1.0f, 0.0f };
+		verts[1].Tangent = { 1.0f, 0.0f,  0.0f };
+
+		verts[2].Pos = { 5.0f, 0.0f,  5.0f };
+		verts[2].Normal = { 0.0f, 1.0f,  0.0f };
+		verts[2].TexC = { 1.0f, 1.0f };
+		verts[2].Tangent = { 1.0f, 0.0f,  0.0f };
+
+		verts[3].Pos = { -5.0f, 0.0f,  5.0f };
+		verts[3].Normal = { 0.0f, 1.0f,  0.0f };
+		verts[3].TexC = { 0.0f, 1.0f };
+		verts[3].Tangent = { 1.0f, 0.0f,  0.0f };
+
+		std::vector<std::uint32_t> inds = { 0, 2, 1,  0, 3, 2 };
+
+		SubmeshGeometry sub;
+		sub.IndexCount = (UINT)inds.size();
+		sub.StartIndexLocation = 0;
+		sub.BaseVertexLocation = 0;
+
+		const UINT vbBytes = (UINT)verts.size() * sizeof(Vertex);
+		const UINT ibBytes = (UINT)inds.size() * sizeof(std::uint32_t);
+
+		auto geo = std::make_unique<MeshGeometry>();
+		geo->Name = "fenceQuadGeo";
+		ThrowIfFailed(D3DCreateBlob(vbBytes, &geo->VertexBufferCPU));
+		CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), verts.data(), vbBytes);
+		ThrowIfFailed(D3DCreateBlob(ibBytes, &geo->IndexBufferCPU));
+		CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), inds.data(), ibBytes);
+		geo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+			mCommandList.Get(), verts.data(), vbBytes, geo->VertexBufferUploader);
+		geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+			mCommandList.Get(), inds.data(), ibBytes, geo->IndexBufferUploader);
+		geo->VertexByteStride = sizeof(Vertex);
+		geo->VertexBufferByteSize = vbBytes;
+		geo->IndexFormat = DXGI_FORMAT_R32_UINT;
+		geo->IndexBufferByteSize = ibBytes;
+		geo->DrawArgs["fenceQuad"] = sub;
+		mGeometries[geo->Name] = std::move(geo);
+	}
 }
 
 void CrateApp::BuildMaterials()
@@ -1193,6 +1253,23 @@ void CrateApp::BuildMaterials()
 		metalMat->DispScale = 0.0f;
 
 		mMaterials["metalSphere"] = std::move(metalMat);
+	}
+	{
+		auto fenceMat = std::make_unique<Material>();
+		fenceMat->Name = "fenceMat";
+		fenceMat->MatCBIndex = (int)mMaterials.size();
+		fenceMat->DiffuseSrvHeapIndex = (int)kFenceDiffuseSlot;
+		fenceMat->NormalSrvHeapIndex = kDefaultNormalSlot;
+		fenceMat->DispSrvHeapIndex = kDefaultDispSlot;
+		fenceMat->RoughnessSrvHeapIndex = kDefaultRoughnessSlot;
+		fenceMat->MetallicSrvHeapIndex = kDefaultMetallicSlot;
+		fenceMat->AOSrvHeapIndex = kDefaultAOSlot;
+		fenceMat->DiffuseAlbedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+		fenceMat->FresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
+		fenceMat->Roughness = 0.8f;
+		fenceMat->DispScale = 0.0f;
+		fenceMat->NumFramesDirty = gNumFrameResources;
+		mMaterials["fenceMat"] = std::move(fenceMat);
 	}
 }
 
@@ -1276,6 +1353,29 @@ void CrateApp::BuildRenderItems()
 		XMStoreFloat4x4(&item->World, world);
 
 		BoundingBox localBounds(XMFLOAT3(0, 0, 0), XMFLOAT3(0.5f, 0.5f, 0.5f));
+		localBounds.Transform(item->WorldBounds, world);
+		item->WorldCenter = item->WorldBounds.Center;
+		item->WorldExtents = item->WorldBounds.Extents;
+
+		mAllRitems.push_back(std::move(item));
+	}
+
+	{
+		auto item = std::make_unique<RenderItem>();
+		item->ObjCBIndex = (UINT)mAllRitems.size();
+		item->NumFramesDirty = gNumFrameResources;
+		item->Mat = mMaterials["fenceMat"].get();
+		item->Geo = mGeometries["fenceQuadGeo"].get();
+		item->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+		item->IndexCount = item->Geo->DrawArgs["fenceQuad"].IndexCount;
+		item->StartIndexLocation = item->Geo->DrawArgs["fenceQuad"].StartIndexLocation;
+		item->BaseVertexLocation = item->Geo->DrawArgs["fenceQuad"].BaseVertexLocation;
+
+		XMMATRIX world = XMMatrixTranslation(10.0f, 3.0f, 0.0f);
+		XMStoreFloat4x4(&item->World, world);
+
+		BoundingBox localBounds(XMFLOAT3(0.0f, 0.0f, 0.0f),
+			XMFLOAT3(5.0f, 0.05f, 5.0f));
 		localBounds.Transform(item->WorldBounds, world);
 		item->WorldCenter = item->WorldBounds.Center;
 		item->WorldExtents = item->WorldBounds.Extents;

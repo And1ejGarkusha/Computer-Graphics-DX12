@@ -6,6 +6,12 @@
 #include <array>
 #include <functional>
 
+using ShadowDrawCallback = std::function<
+    void(ID3D12GraphicsCommandList*,
+        int,
+        D3D12_GPU_DESCRIPTOR_HANDLE)
+>;
+
 class ShadowPass
 {
 public:
@@ -26,7 +32,11 @@ public:
         ID3D12GraphicsCommandList* cmdList,
         ShadowMap& shadowMap,
         const FrameResource& frameRes,
-        std::function<void(ID3D12GraphicsCommandList*, int)> drawCallback);
+        ShadowDrawCallback drawCallback);
+
+    static const UINT kRootObjCB = 0;
+    static const UINT kRootShadowPassCB = 1;
+    static const UINT kRootDiffuseTex = 2;
 
 private:
     static std::array<DirectX::XMVECTOR, 8> GetSubFrustumCornersWS(

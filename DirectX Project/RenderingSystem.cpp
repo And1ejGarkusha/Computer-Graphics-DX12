@@ -95,7 +95,8 @@ void RenderingSystem::DrawLightingPass(
     D3D12_GPU_DESCRIPTOR_HANDLE shadowSRV,
     D3D12_GPU_DESCRIPTOR_HANDLE irradianceSRV,
     D3D12_GPU_DESCRIPTOR_HANDLE prefilterSRV,
-    D3D12_GPU_DESCRIPTOR_HANDLE brdfLutSRV)
+    D3D12_GPU_DESCRIPTOR_HANDLE brdfLutSRV,
+    D3D12_GPU_DESCRIPTOR_HANDLE spotLightBufSRV)
 {
     ID3D12DescriptorHeap* heaps[] = { srvHeap };
     cmdList->SetDescriptorHeaps(1, heaps);
@@ -107,6 +108,7 @@ void RenderingSystem::DrawLightingPass(
     cmdList->SetGraphicsRootDescriptorTable(4, irradianceSRV);
     cmdList->SetGraphicsRootDescriptorTable(5, prefilterSRV);
     cmdList->SetGraphicsRootDescriptorTable(6, brdfLutSRV);
+    cmdList->SetGraphicsRootDescriptorTable(7, spotLightBufSRV);
 
     cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmdList->IASetVertexBuffers(0, 0, nullptr);
@@ -139,8 +141,10 @@ void RenderingSystem::BuildLightingRootSignature(ID3D12Device* device)
     prefilterTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 6);
     CD3DX12_DESCRIPTOR_RANGE brdfLutTable;
     brdfLutTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 7);
+    CD3DX12_DESCRIPTOR_RANGE spotLightBufTable;
+    spotLightBufTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 8);
 
-    CD3DX12_ROOT_PARAMETER params[7];
+    CD3DX12_ROOT_PARAMETER params[8];
     params[0].InitAsDescriptorTable(1, &gbufferTable, D3D12_SHADER_VISIBILITY_PIXEL);
     params[1].InitAsConstantBufferView(0);
     params[2].InitAsDescriptorTable(1, &depthTable, D3D12_SHADER_VISIBILITY_PIXEL);
@@ -148,6 +152,7 @@ void RenderingSystem::BuildLightingRootSignature(ID3D12Device* device)
     params[4].InitAsDescriptorTable(1, &irradianceTable, D3D12_SHADER_VISIBILITY_PIXEL);
     params[5].InitAsDescriptorTable(1, &prefilterTable, D3D12_SHADER_VISIBILITY_PIXEL);
     params[6].InitAsDescriptorTable(1, &brdfLutTable, D3D12_SHADER_VISIBILITY_PIXEL);
+    params[7].InitAsDescriptorTable(1, &spotLightBufTable, D3D12_SHADER_VISIBILITY_PIXEL);
 
     CD3DX12_STATIC_SAMPLER_DESC linearClamp(0,
         D3D12_FILTER_MIN_MAG_MIP_LINEAR,
@@ -212,14 +217,14 @@ void RenderingSystem::BuildPSOs(
     auto hsGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "HS", "hs_5_0");
     auto dsGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "DS", "ds_5_0");
     auto psGeo = d3dUtil::CompileShader(L"Shaders\\GBuffer.hlsl", nullptr, "PS", "ps_5_0");
-    
+
     auto vsLOD1 = d3dUtil::CompileShader(L"Shaders\\GBufferLOD1.hlsl", nullptr, "VS", "vs_5_0");
     auto psLOD1 = d3dUtil::CompileShader(L"Shaders\\GBufferLOD1.hlsl", nullptr, "PS", "ps_5_0");
-    
+
     auto vsBB = d3dUtil::CompileShader(L"Shaders\\Billboard.hlsl", nullptr, "VS", "vs_5_0");
     auto gsBB = d3dUtil::CompileShader(L"Shaders\\Billboard.hlsl", nullptr, "GS", "gs_5_0");
     auto psBB = d3dUtil::CompileShader(L"Shaders\\Billboard.hlsl", nullptr, "PS", "ps_5_0");
-    
+
     auto vsLit = d3dUtil::CompileShader(L"Shaders\\DeferredLighting.hlsl", nullptr, "VS", "vs_5_0");
     auto psLit = d3dUtil::CompileShader(L"Shaders\\DeferredLighting.hlsl", nullptr, "PS", "ps_5_0");
 

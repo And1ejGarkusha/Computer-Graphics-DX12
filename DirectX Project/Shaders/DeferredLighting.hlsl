@@ -27,6 +27,7 @@ Texture2DArray gShadowMap : register(t4);
 TextureCube gIrradianceMap : register(t5);
 TextureCube gPrefilterMap : register(t6);
 Texture2D gBrdfLUT : register(t7);
+StructuredBuffer<Light> gFiredSpotLights : register(t8);
 
 SamplerState gsamLinearClamp : register(s0);
 SamplerComparisonState gsamShadow : register(s1);
@@ -231,8 +232,9 @@ float4 PS(VertexOut pin) : SV_Target
     for (int pi = NUM_DIR_LIGHTS; pi < NUM_DIR_LIGHTS + NUM_POINT_LIGHTS; ++pi)
         directResult += ComputePointLight(gLights[pi], mat, posW, N, V);
     int spotBase = NUM_DIR_LIGHTS + NUM_POINT_LIGHTS;
-    for (int si = spotBase; si < spotBase + gNumActiveSpotLights; ++si)
-        directResult += ComputeSpotLight(gLights[si], mat, posW, N, V);
+    directResult += ComputeSpotLight(gLights[spotBase], mat, posW, N, V);
+    for (int si = 0; si < gNumActiveSpotLights; ++si)
+        directResult += ComputeSpotLight(gFiredSpotLights[si], mat, posW, N, V);
 
     float4 directLight = float4(directResult, 0.0f);
 
@@ -251,7 +253,7 @@ float4 PS(VertexOut pin) : SV_Target
         gsamLinearWrap, R, roughness * MAX_REFLECTION_LOD).rgb;
     float2 brdfUV = float2(max(dot(N, V), 0.0f), roughness);
     float2 brdfScale = gBrdfLUT.Sample(gsamLinearClamp, brdfUV).rg;
-    float3 specularIBL = prefilteredColor * (F0 * brdfScale.x + brdfScale.y);
+    float3 specularIBL = prefilteredColor * (kS * brdfScale.x + brdfScale.y);
 
     float3 ambient = diffuseIBL + specularIBL;
     

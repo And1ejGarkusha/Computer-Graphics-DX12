@@ -28,9 +28,9 @@ const int NUM_POINT_LIGHTS = 1;
 const int NUM_SPOT_LIGHTS = 1;
 
 static const int kMaxFiredSpots = 14;
-static const float kSpotLifetime = 10.0f;
-static const float kSpotSpeed = 3.0f;
-static const float kSpotRotSpeed = 1.5f;
+static const float kSpotLifetime = 15.0f;
+static const float kSpotSpeed = 3.5f;
+static const float kSpotRotSpeed = 1.8f;
 
 struct FiredSpotLight
 {
@@ -177,6 +177,7 @@ private:
 	static const UINT kIrradianceSrvSlot = kGBufferSrvBaseSlot + 4;
 	static const UINT kPrefilterSrvSlot = kGBufferSrvBaseSlot + 5;
 	static const UINT kBrdfLutSrvSlot = kGBufferSrvBaseSlot + 6;
+	static const UINT kSpotLightBufSrvSlot = kGBufferSrvBaseSlot + 7;
 
 	RenderingSystem mRenderingSystem;
 
@@ -767,6 +768,26 @@ void CrateApp::Draw(const GameTimer& gt)
 		mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart(),
 		kBrdfLutSrvSlot, mCbvSrvDescriptorSize);
 
+	{
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = kMaxFiredSpots;
+		srvDesc.Buffer.StructureByteStride = sizeof(Light);
+		srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+		CD3DX12_CPU_DESCRIPTOR_HANDLE cpuHandle(
+			mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+			kSpotLightBufSrvSlot, mCbvSrvDescriptorSize);
+		md3dDevice->CreateShaderResourceView(
+			mCurrFrameResource->SpotLightBuffer->Resource(), &srvDesc, cpuHandle);
+	}
+	CD3DX12_GPU_DESCRIPTOR_HANDLE spotLightBufSRV(
+		mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart(),
+		kSpotLightBufSrvSlot, mCbvSrvDescriptorSize);
+
 	mRenderingSystem.DrawLightingPass(
 		mCommandList.Get(),
 		mSrvDescriptorHeap.Get(),
@@ -775,7 +796,8 @@ void CrateApp::Draw(const GameTimer& gt)
 		mShadowMap.GetSRV(),
 		irradianceSRV,
 		prefilterSRV,
-		brdfLutSRV);
+		brdfLutSRV,
+		spotLightBufSRV);
 
 	auto depthToWrite = CD3DX12_RESOURCE_BARRIER::Transition(
 		mDepthStencilBuffer.Get(),
@@ -831,7 +853,7 @@ void CrateApp::UpdateMainPassCB(const GameTimer& gt)
 	mMainPassCB.AmbientLight = { 0.15f, 0.15f, 0.15f, 1.0f };
 
 	//Directional light
-	mMainPassCB.Lights[0].Direction = { 0.0f, -1.0f, 0.0f };
+	mMainPassCB.Lights[0].Direction = { -1.0f, -1.0f, 0.0f };
 	mMainPassCB.Lights[0].Strength = { 6.0f,  6.0f,  6.0f };
 
 	//Point light
@@ -856,9 +878,9 @@ void CrateApp::UpdateMainPassCB(const GameTimer& gt)
 	}
 
 	{
-		int baseIdx = NUM_DIR_LIGHTS + NUM_POINT_LIGHTS + 1;
 		int count = (int)mFiredSpots.size();
-		for (int i = 0; i < count && i < kMaxFiredSpots - 1; ++i)
+		int writeCount = min(count, kMaxFiredSpots);
+		for (int i = 0; i < writeCount; ++i)
 		{
 			const auto& fs = mFiredSpots[i];
 			XMVECTOR baseDir = XMLoadFloat3(&fs.BaseDir);
@@ -876,17 +898,16 @@ void CrateApp::UpdateMainPassCB(const GameTimer& gt)
 			if (fs.Age > kSpotLifetime - 1.0f)
 				fade = kSpotLifetime - fs.Age;
 
-			mMainPassCB.Lights[baseIdx + i].Position = fs.Position;
-			mMainPassCB.Lights[baseIdx + i].Direction = dirF;
-			mMainPassCB.Lights[baseIdx + i].Strength = {
-				fs.Color.x * fade,
-				fs.Color.y * fade,
-				fs.Color.z * fade };
-			mMainPassCB.Lights[baseIdx + i].FalloffStart = 2.0f;
-			mMainPassCB.Lights[baseIdx + i].FalloffEnd = 20.0f;
-			mMainPassCB.Lights[baseIdx + i].SpotPower = 64.0f;
+			Light l = {};
+			l.Position = fs.Position;
+			l.Direction = dirF;
+			l.Strength = { fs.Color.x * fade, fs.Color.y * fade, fs.Color.z * fade };
+			l.FalloffStart = 2.0f;
+			l.FalloffEnd = 20.0f;
+			l.SpotPower = 64.0f;
+			mCurrFrameResource->SpotLightBuffer->CopyData(i, l);
 		}
-		mMainPassCB.NumActiveSpotLights = 1 + min(count, kMaxFiredSpots - 1);
+		mMainPassCB.NumActiveSpotLights = writeCount;
 	}
 
 	mShadowPass.UpdateCascades(
@@ -1639,6 +1660,7 @@ void CrateApp::LoadOBJModel(const std::string& filename, const std::string& mode
 		mMaterials[mat->Name] = std::move(mat);
 	}
 
+	//const XMMATRIX world = XMMatrixScaling(0.2f, 0.2f, 0.2f);
 	const XMMATRIX world = XMMatrixScaling(0.02f, 0.02f, 0.02f);
 
 	for (const auto& drawArg : mesh.DrawArgs)
@@ -2106,8 +2128,12 @@ void CrateApp::LoadTextureFromFile(const std::string& path,
 void CrateApp::BuildFrameResources()
 {
 	for (int i = 0; i < gNumFrameResources; ++i)
+	{
 		mFrameResources.push_back(std::make_unique<FrameResource>(
 			md3dDevice.Get(), 1, (UINT)mAllRitems.size(), (UINT)mMaterials.size()));
+		mFrameResources.back()->SpotLightBuffer =
+			std::make_unique<UploadBuffer<Light>>(md3dDevice.Get(), kMaxFiredSpots, false);
+	}
 }
 
 void CrateApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList,

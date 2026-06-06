@@ -78,5 +78,7 @@ public:
     std::unique_ptr<UploadBuffer<ObjectConstants>>     ObjectCB = nullptr;
     std::unique_ptr<UploadBuffer<ShadowPassConstants>> ShadowPassCB = nullptr;
 
+    std::unique_ptr<UploadBuffer<Light>>               SpotLightBuffer = nullptr;
+
     UINT64 Fence = 0;
 };

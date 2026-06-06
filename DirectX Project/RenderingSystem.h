@@ -46,7 +46,8 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE shadowSRV,
         D3D12_GPU_DESCRIPTOR_HANDLE irradianceSRV,
         D3D12_GPU_DESCRIPTOR_HANDLE prefilterSRV,
-        D3D12_GPU_DESCRIPTOR_HANDLE brdfLutSRV);
+        D3D12_GPU_DESCRIPTOR_HANDLE brdfLutSRV,
+        D3D12_GPU_DESCRIPTOR_HANDLE spotLightBufSRV);
 
     void ToggleWireframe() { mWireframeMode = !mWireframeMode; }
     bool IsWireframe()     const { return mWireframeMode; }

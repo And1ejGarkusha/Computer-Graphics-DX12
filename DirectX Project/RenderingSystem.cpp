@@ -18,7 +18,6 @@ void RenderingSystem::Initialize(
     mSrvBaseSlot = gbufferSrvBaseSlot;
 
     BuildRtvHeap(device);
-    BuildHDRDescriptorHeaps(device);
 
     mGBuffer.Create(device, width, height,
         mGBufferRtvHeap.Get(), 0,
@@ -27,7 +26,6 @@ void RenderingSystem::Initialize(
 
     BuildLightingRootSignature(device);
     BuildPSOs(device, backBufferFormat, depthStencilFormat, geometryRootSig);
-    BuildHDRColorBuffer(device, width, height);
 }
 
 void RenderingSystem::OnResize(
@@ -41,8 +39,6 @@ void RenderingSystem::OnResize(
         mGBufferRtvHeap.Get(), 0,
         srvHeap, gbufferSrvBaseSlot,
         mRtvDescSize, mSrvDescSize);
-
-    BuildHDRColorBuffer(device, width, height);
 }
 
 void RenderingSystem::BeginGeometryPass(
@@ -76,27 +72,19 @@ void RenderingSystem::EndGeometryPass(ID3D12GraphicsCommandList* cmdList)
 
 void RenderingSystem::BeginLightingPass(
     ID3D12GraphicsCommandList* cmdList,
+    D3D12_CPU_DESCRIPTOR_HANDLE backBufferRTV,
     D3D12_CPU_DESCRIPTOR_HANDLE dsv,
     const D3D12_VIEWPORT& viewport,
     const D3D12_RECT& scissor)
 {
     float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    cmdList->ClearRenderTargetView(mHDRColorRTV, clearColor, 0, nullptr);
-    cmdList->OMSetRenderTargets(1, &mHDRColorRTV, true, &dsv);
+    cmdList->ClearRenderTargetView(backBufferRTV, clearColor, 0, nullptr);
+    cmdList->OMSetRenderTargets(1, &backBufferRTV, true, &dsv);
     cmdList->RSSetViewports(1, &viewport);
     cmdList->RSSetScissorRects(1, &scissor);
 
     cmdList->SetPipelineState(mLightingPSO.Get());
     cmdList->SetGraphicsRootSignature(mLightingRootSig.Get());
-}
-
-void RenderingSystem::EndLightingPass(ID3D12GraphicsCommandList* cmdList)
-{
-    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-        mHDRColorBuffer.Get(),
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    cmdList->ResourceBarrier(1, &barrier);
 }
 
 void RenderingSystem::DrawLightingPass(
@@ -137,85 +125,6 @@ void RenderingSystem::BuildRtvHeap(ID3D12Device* device)
     ThrowIfFailed(device->CreateDescriptorHeap(
         &desc, IID_PPV_ARGS(mGBufferRtvHeap.GetAddressOf())));
     mGBufferRtvHeap->SetName(L"GBuffer RTV Heap");
-}
-
-void RenderingSystem::BuildHDRDescriptorHeaps(ID3D12Device* device)
-{
-    {
-        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-        desc.NumDescriptors = 1;
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        ThrowIfFailed(device->CreateDescriptorHeap(
-            &desc, IID_PPV_ARGS(mHDRRtvHeap.GetAddressOf())));
-        mHDRRtvHeap->SetName(L"HDR Color RTV Heap");
-        mHDRColorRTV = mHDRRtvHeap->GetCPUDescriptorHandleForHeapStart();
-    }
-
-    {
-        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-        desc.NumDescriptors = 1;
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        ThrowIfFailed(device->CreateDescriptorHeap(
-            &desc, IID_PPV_ARGS(mHDRSrvHeapGPU.GetAddressOf())));
-        mHDRSrvHeapGPU->SetName(L"HDR Color SRV Heap");
-
-        mHDRColorSRV_CPU = mHDRSrvHeapGPU->GetCPUDescriptorHandleForHeapStart();
-        mHDRColorSRV_GPU = mHDRSrvHeapGPU->GetGPUDescriptorHandleForHeapStart();
-    }
-}
-
-void RenderingSystem::BuildHDRColorBuffer(ID3D12Device* device, UINT width, UINT height)
-{
-    if (width == 0 || height == 0)
-        return;
-
-    if (mHDRColorBuffer)
-        mHDRColorBuffer.Reset();
-
-    D3D12_RESOURCE_DESC texDesc = {};
-    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    texDesc.Width = width;
-    texDesc.Height = height;
-    texDesc.DepthOrArraySize = 1;
-    texDesc.MipLevels = 1;
-    texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    texDesc.SampleDesc.Count = 1;
-    texDesc.SampleDesc.Quality = 0;
-    texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
-    D3D12_CLEAR_VALUE clearValue = {};
-    clearValue.Format = texDesc.Format;
-    clearValue.Color[0] = 0.0f;
-    clearValue.Color[1] = 0.0f;
-    clearValue.Color[2] = 0.0f;
-    clearValue.Color[3] = 1.0f;
-
-    CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
-    ThrowIfFailed(device->CreateCommittedResource(
-        &heapProps,
-        D3D12_HEAP_FLAG_NONE,
-        &texDesc,
-        D3D12_RESOURCE_STATE_COMMON,
-        &clearValue,
-        IID_PPV_ARGS(&mHDRColorBuffer)));
-    mHDRColorBuffer->SetName(L"HDR Color Buffer");
-
-    D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-    rtvDesc.Format = texDesc.Format;
-    rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-    device->CreateRenderTargetView(mHDRColorBuffer.Get(), &rtvDesc, mHDRColorRTV);
-
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format = texDesc.Format;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MostDetailedMip = 0;
-    srvDesc.Texture2D.MipLevels = 1;
-
-    device->CreateShaderResourceView(mHDRColorBuffer.Get(), &srvDesc, mHDRColorSRV_CPU);
 }
 
 void RenderingSystem::BuildLightingRootSignature(ID3D12Device* device)
@@ -417,7 +326,7 @@ void RenderingSystem::BuildPSOs(
         desc.SampleMask = UINT_MAX;
         desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         desc.NumRenderTargets = 1;
-        desc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        desc.RTVFormats[0] = backBufferFormat;
         desc.SampleDesc.Count = 1;
         desc.DSVFormat = depthStencilFormat;
         ThrowIfFailed(device->CreateGraphicsPipelineState(

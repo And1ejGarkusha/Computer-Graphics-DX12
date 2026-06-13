@@ -11,7 +11,6 @@ FrameResource::FrameResource(ID3D12Device* device, UINT passCount, UINT objectCo
     ObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(device, objectCount, true);
 
     ShadowPassCB = std::make_unique<UploadBuffer<ShadowPassConstants>>(device, NUM_CASCADES, true);
-    PostProcessCB = std::make_unique<UploadBuffer<PostProcessConstants>>(device, 1, true);
 
     SpotLightBuffer = std::make_unique<UploadBuffer<Light>>(device, 14, false);
 }

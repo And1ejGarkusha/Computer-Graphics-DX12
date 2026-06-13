@@ -21,6 +21,21 @@ struct ShadowPassConstants
     DirectX::XMFLOAT4X4 LightViewProj = MathHelper::Identity4x4();
 };
 
+struct PostProcessConstants
+{
+    float RenderTargetWidth;
+    float RenderTargetHeight;
+    float InvRenderTargetWidth;
+    float InvRenderTargetHeight;
+    float TotalTime;
+    float Gamma;
+    int EdgeDetection;
+    int VCRFilter;
+    float NearZ;
+    float FarZ;
+    float Padding[2];
+};
+
 struct PassConstants
 {
     DirectX::XMFLOAT4X4 View = MathHelper::Identity4x4();
@@ -77,6 +92,7 @@ public:
     std::unique_ptr<UploadBuffer<MaterialConstants>>   MaterialCB = nullptr;
     std::unique_ptr<UploadBuffer<ObjectConstants>>     ObjectCB = nullptr;
     std::unique_ptr<UploadBuffer<ShadowPassConstants>> ShadowPassCB = nullptr;
+    std::unique_ptr<UploadBuffer<PostProcessConstants>> PostProcessCB = nullptr;
 
     std::unique_ptr<UploadBuffer<Light>>               SpotLightBuffer = nullptr;
 

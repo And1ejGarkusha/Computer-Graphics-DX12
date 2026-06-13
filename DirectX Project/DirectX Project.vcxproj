@@ -154,6 +154,7 @@
     <ClCompile Include="GeometryGenerator.cpp" />
     <ClCompile Include="MathHelper.cpp" />
     <ClCompile Include="OBJLoader.cpp" />
+    <ClCompile Include="PostProcessPass.cpp" />
     <ClCompile Include="RenderingSystem.cpp" />
     <ClCompile Include="ShadowPass.cpp" />
   </ItemGroup>
@@ -170,6 +171,7 @@
     <ClInclude Include="MathHelper.h" />
     <ClInclude Include="OBJLoader.h" />
     <ClInclude Include="Octree.h" />
+    <ClInclude Include="PostProcessPass.h" />
     <ClInclude Include="RenderingSystem.h" />
     <ClInclude Include="ShadowMap.h" />
     <ClInclude Include="ShadowPass.h" />
